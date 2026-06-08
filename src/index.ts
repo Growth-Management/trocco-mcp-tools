@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { analyzeSql } from "./sqlAnalysis.js";
 import { TroccoClient, TroccoClientError, type TroccoDatamartDefinition, type TroccoWorkflow } from "./troccoClient.js";
 
 const server = new McpServer({
@@ -146,13 +147,15 @@ function normalizeWorkflow(workflow: TroccoWorkflow, requestedId: number) {
 
 function normalizeDatamart(datamart: TroccoDatamartDefinition, requestedId: number) {
   const bigqueryOption = isRecord(datamart.datamart_bigquery_option) ? datamart.datamart_bigquery_option : null;
+  const sql = readBigQueryString(bigqueryOption, "query");
 
   return {
     datamart_definition_id: readNumber(datamart.id) ?? requestedId,
     name: readString(datamart.name),
     data_warehouse_type: readString(datamart.data_warehouse_type),
     datamart_bigquery_option: bigqueryOption,
-    sql: readBigQueryString(bigqueryOption, "query"),
+    sql,
+    sql_analysis: analyzeSql(sql),
     query_mode: readBigQueryString(bigqueryOption, "query_mode"),
     destination_dataset: readBigQueryString(bigqueryOption, "destination_dataset"),
     destination_table: readBigQueryString(bigqueryOption, "destination_table"),
