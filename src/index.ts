@@ -51,6 +51,68 @@ server.tool(
   },
 );
 
+server.tool(
+  "build_workflow_audit_payload",
+  "Fetch a TROCCO workflow and its BigQuery datamart definitions, returning a single read-only audit payload.",
+  {
+    pipeline_definition_id: z.number().int().positive(),
+  },
+  async ({ pipeline_definition_id }) => {
+    try {
+      const client = new TroccoClient();
+      const workflow = await client.getWorkflow(pipeline_definition_id);
+      const normalizedWorkflow = normalizeWorkflow(workflow, pipeline_definition_id);
+      const datamarts = [];
+      const datamart_errors = [];
+
+      for (const datamartTask of normalizedWorkflow.datamart_tasks) {
+        if (!datamartTask.definition_id) {
+          datamart_errors.push({
+            task_identifier: datamartTask.task_identifier,
+            error: {
+              code: "missing_definition_id",
+              message: "Datamart task does not include trocco_bigquery_datamart_config.definition_id.",
+            },
+          });
+          continue;
+        }
+
+        try {
+          const datamart = await client.getDatamart(datamartTask.definition_id);
+          datamarts.push({
+            task_identifier: datamartTask.task_identifier,
+            task_key: datamartTask.key,
+            task_type: datamartTask.type,
+            definition_id: datamartTask.definition_id,
+            ...normalizeDatamart(datamart, datamartTask.definition_id),
+            raw: datamart,
+          });
+        } catch (error) {
+          datamart_errors.push({
+            task_identifier: datamartTask.task_identifier,
+            definition_id: datamartTask.definition_id,
+            ...toErrorPayload(error),
+          });
+        }
+      }
+
+      return jsonContent({
+        ok: datamart_errors.length === 0,
+        pipeline_definition_id: normalizedWorkflow.pipeline_definition_id,
+        workflow_name: normalizedWorkflow.name,
+        workflow: normalizedWorkflow,
+        datamarts,
+        datamart_errors,
+        raw: {
+          workflow,
+        },
+      });
+    } catch (error) {
+      return jsonContent(toErrorPayload(error));
+    }
+  },
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
