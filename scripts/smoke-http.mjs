@@ -22,8 +22,10 @@ const client = new Client({
 });
 
 const transport = new StreamableHTTPClientTransport(new URL(endpoint), {
-  authProvider: {
-    token: async () => token.trim(),
+  requestInit: {
+    headers: {
+      Authorization: `Bearer ${token.trim()}`,
+    },
   },
 });
 
