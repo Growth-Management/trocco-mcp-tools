@@ -6,7 +6,7 @@ import { createTroccoMcpServer } from "./server.js";
 
 const app = createMcpExpressApp({ host: "0.0.0.0" });
 const port = Number(process.env.PORT ?? 8080);
-const authToken = process.env.MCP_AUTH_TOKEN;
+const authToken = process.env.MCP_AUTH_TOKEN?.trim();
 
 app.get("/status", (_req: Request, res: Response) => {
   res.status(200).json({ ok: true, service: "trocco-mcp-tools" });
@@ -60,8 +60,8 @@ function requireAuthToken(req: Request, res: Response, next: NextFunction) {
   }
 
   const authorization = req.header("authorization");
-  const bearerToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
-  const headerToken = req.header("x-mcp-auth-token");
+  const bearerToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  const headerToken = req.header("x-mcp-auth-token")?.trim();
 
   if (bearerToken === authToken || headerToken === authToken) {
     next();
