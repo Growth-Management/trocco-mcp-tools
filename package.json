@@ -1,0 +1,28 @@
+{
+  "name": "trocco-mcp-tools",
+  "version": "0.1.0",
+  "description": "Read-only MCP tools for TROCCO workflow and BigQuery datamart auditing.",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "trocco-mcp-tools": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "inspector": "npx @modelcontextprotocol/inspector node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.13.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
