@@ -13,6 +13,7 @@ TROCCO API を Model Context Protocol (MCP) から扱うための読み取り専
 - datamart SQL
 - datamart の出力先 dataset / table
 - write_disposition、incremental_column、merge_keys、lookback_period などの更新設定
+- SQL から推定した source table / destination / write disposition
 
 初期段階では読み取り専用のツールに限定し、TROCCO 側の設定変更や実行操作は対象外とします。
 
@@ -24,6 +25,7 @@ TROCCO API を Model Context Protocol (MCP) から扱うための読み取り専
 - Validation: `zod`
 - Entry point: `src/index.ts`
 - TROCCO API client: `src/troccoClient.ts`
+- SQL analysis: `src/sqlAnalysis.ts`
 
 ## 既定の監査対象
 
@@ -100,21 +102,6 @@ Input:
 }
 ```
 
-Output の主な項目:
-
-```json
-{
-  "ok": true,
-  "pipeline_definition_id": 3847,
-  "name": "SH_PLUS_BQ_RAISE_data_daily_new",
-  "tasks": [],
-  "task_dependencies": [],
-  "normalized_task_dependencies": [],
-  "datamart_tasks": [],
-  "raw": {}
-}
-```
-
 ### `get_datamart`
 
 指定した datamart definition の SQL と BigQuery option metadata を取得します。
@@ -140,6 +127,12 @@ Output の主な項目:
   "name": "example_datamart",
   "data_warehouse_type": "bigquery",
   "sql": "select * from dataset.table",
+  "sql_analysis": {
+    "source_tables": ["dataset.table"],
+    "destinations": [],
+    "inferred_write_disposition": "unknown",
+    "destination_also_used_as_source": false
+  },
   "query_mode": "insert",
   "destination_dataset": "dataset",
   "destination_table": "table",
@@ -179,6 +172,18 @@ Output の主な項目:
   "datamart_errors": []
 }
 ```
+
+## SQL analysis
+
+`sql_analysis` は SQL コメントを除去したうえで、監査に必要な最低限の候補を抽出します。
+
+- `from` / `join` から source table 候補を抽出
+- `create or replace table` / `insert into` / `delete from` / `merge` から destination 候補を抽出
+- `delete from` と `insert into` の組み合わせを `delete_insert` として推定
+- `merge` を `merge` として推定
+- destination と source が同じ table の場合に `destination_also_used_as_source` を `true` にする
+
+高度な SQL lineage parser ではないため、確定値ではなく監査用の候補値として扱います。
 
 ## Error payload
 
@@ -224,8 +229,7 @@ Error code:
 ## 次の実装ステップ
 
 1. 実環境で `npm install` / `npm run build` を確認する
-2. Inspector で `pipeline_definition_id=3847` の `get_workflow` を実行する
-3. 返却された `datamarts[]` と `datamart_errors[]` を確認する
-4. SQL から source table / destination 推定を行う軽量 parser を追加する
-5. `delete from` + `insert` を `delete_insert` として扱う推定ロジックを追加する
-6. downstream reference と risk flags を audit payload に追加する
+2. Inspector で `pipeline_definition_id=3847` の `build_workflow_audit_payload` を実行する
+3. 返却された `datamarts[]`、`datamart_errors[]`、`sql_analysis` を確認する
+4. downstream reference と risk flags を audit payload に追加する
+5. 実レスポンスに合わせて normalized schema を調整する
