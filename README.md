@@ -1,6 +1,18 @@
 # trocco-mcp-tools
 
-TROCCO API を Model Context Protocol (MCP) から扱うための読み取り専用ツール群です。TROCCO workflow と BigQuery datamart の差分監査に必要な情報を取得し、監査エージェントが SQL、出力先、更新方式、依存関係、リスク候補を整理できる状態を目指します。
+TROCCO API を Model Context Protocol (MCP) から扱うための読み取り専用ツール群です。TROCCO workflow と BigQuery datamart の差分監査に必要な情報を取得し、ChatGPT から監査エージェントが SQL、出力先、更新方式、依存関係、リスク候補を整理できる状態を目指します。
+
+## 現在の優先方針
+
+現在の最優先は、実監査そのものではなく、この TROCCO MCP server を ChatGPT から追加・接続できる状態にすることです。
+
+進め方:
+
+1. Cloud Run などに HTTP MCP endpoint を deploy する
+2. `TROCCO_API_KEY` を安全に server 側へ注入する
+3. ChatGPT から MCP server を追加する
+4. ChatGPT から `build_workflow_audit_payload` を呼べることを確認する
+5. 以後の監査は ChatGPT から MCP tool を利用して実行する
 
 ## 目的
 
@@ -26,10 +38,26 @@ TROCCO API を Model Context Protocol (MCP) から扱うための読み取り専
 - Language: TypeScript
 - MCP framework: `@modelcontextprotocol/sdk`
 - Validation: `zod`
-- Entry point: `src/index.ts`
+- Stdio entry point: `src/index.ts`
+- HTTP entry point: `src/http.ts`
+- Shared MCP server factory: `src/server.ts`
 - TROCCO API client: `src/troccoClient.ts`
 - SQL analysis: `src/sqlAnalysis.ts`
 - Audit model: `src/auditModel.ts`
+
+## Transport
+
+この repository では 2 種類の起動方式を持ちます。
+
+- stdio: Cloud Shell やローカルでの検証用
+- Streamable HTTP: ChatGPT / Cloud Run 接続用
+
+HTTP endpoint:
+
+- `GET /healthz`: health check
+- `POST /mcp`: MCP Streamable HTTP endpoint
+
+`MCP_AUTH_TOKEN` を設定した場合、`POST /mcp` は `Authorization: Bearer <token>` または `x-mcp-auth-token: <token>` を要求します。
 
 ## 既定の監査対象
 
@@ -44,6 +72,8 @@ TROCCO API 接続に必要な認証情報は環境変数から読み込みます
 
 - `TROCCO_API_KEY`: TROCCO API key
 - `TROCCO_BASE_URL`: TROCCO API base URL。未指定時は `https://trocco.io` を使います
+- `PORT`: HTTP server port。Cloud Run では自動設定されます
+- `MCP_AUTH_TOKEN`: 任意。HTTP MCP endpoint 用の bearer token
 
 TROCCO API は `Authorization: Token {{API KEY}}` 形式の header で認証します。
 
@@ -54,13 +84,65 @@ npm install
 npm run build
 ```
 
-MCP server を stdio で起動します。
+stdio server を起動します。
 
 ```bash
-TROCCO_API_KEY=... npm run start
+TROCCO_API_KEY=... npm run start:stdio
 ```
 
-Inspector で確認します。
+HTTP server を起動します。
+
+```bash
+TROCCO_API_KEY=... MCP_AUTH_TOKEN=... npm run start:http
+```
+
+health check:
+
+```bash
+curl http://localhost:8080/healthz
+```
+
+## Cloud Run deployment
+
+Secret Manager に TROCCO API key を保存します。
+
+```bash
+printf '%s' '<TROCCO_API_KEY>' | gcloud secrets create trocco-api-key --data-file=-
+```
+
+任意で MCP endpoint 用 token も保存します。
+
+```bash
+printf '%s' '<MCP_AUTH_TOKEN>' | gcloud secrets create trocco-mcp-auth-token --data-file=-
+```
+
+Cloud Run に deploy します。
+
+```bash
+gcloud run deploy trocco-mcp-tools \
+  --source . \
+  --region asia-northeast1 \
+  --allow-unauthenticated \
+  --set-secrets TROCCO_API_KEY=trocco-api-key:latest,MCP_AUTH_TOKEN=trocco-mcp-auth-token:latest
+```
+
+Deploy 後に確認します。
+
+```bash
+curl https://<cloud-run-url>/healthz
+```
+
+ChatGPT に追加するときの MCP endpoint は次です。
+
+```text
+https://<cloud-run-url>/mcp
+```
+
+`MCP_AUTH_TOKEN` を設定した場合は、ChatGPT 側の connector 設定で bearer token として同じ値を設定してください。
+
+## Inspector / local verification
+
+Inspector で stdio server を確認します。
 
 ```bash
 TROCCO_API_KEY=... npm run build
@@ -146,8 +228,8 @@ Output の主な項目:
 `sql_analysis` は SQL コメントを除去したうえで、監査に必要な最低限の候補を抽出します。
 
 - `from` / `join` から source table 候補を抽出
-- `create or replace table` / `insert into` / `delete from` / `merge` から destination 候補を抽出
-- `delete from` と `insert into` の組み合わせを `delete_insert` として推定
+- `create or replace table` / `insert into` / `insert <table>` / `delete from` / `merge` から destination 候補を抽出
+- `delete from` と `insert` の組み合わせを `delete_insert` として推定
 - `merge` を `merge` として推定
 - destination と source が同じ table の場合に `destination_also_used_as_source` を `true` にする
 
@@ -209,7 +291,10 @@ Error code:
 ## 次の確認ステップ
 
 1. `git pull` で最新の `main` を取得する
-2. `npm run build` を実行する
-3. `build_workflow_audit_payload` を `pipeline_definition_id=3847` で実行する
-4. `risk_flags` と `downstream_references` を確認する
-5. 実レスポンスに合わせて normalized schema と SQL parser を調整する
+2. `npm install` を実行し、新しい依存関係を取得する
+3. `npm run build` を実行する
+4. `npm run start:http` で HTTP server を起動する
+5. `/healthz` と `/mcp` の疎通を確認する
+6. Cloud Run に deploy する
+7. ChatGPT に `https://<cloud-run-url>/mcp` を追加する
+8. ChatGPT から `build_workflow_audit_payload` を実行し、監査に進む
