@@ -44,6 +44,7 @@ TROCCO API を Model Context Protocol (MCP) から扱うための読み取り専
 - TROCCO API client: `src/troccoClient.ts`
 - SQL analysis: `src/sqlAnalysis.ts`
 - Audit model: `src/auditModel.ts`
+- HTTP smoke test: `scripts/smoke-http.mjs`
 
 ## Transport
 
@@ -74,6 +75,8 @@ TROCCO API 接続に必要な認証情報は環境変数から読み込みます
 - `TROCCO_BASE_URL`: TROCCO API base URL。未指定時は `https://trocco.io` を使います
 - `PORT`: HTTP server port。Cloud Run では自動設定されます
 - `MCP_AUTH_TOKEN`: HTTP MCP endpoint 用の bearer token
+- `MCP_ENDPOINT`: smoke test 用 MCP endpoint URL
+- `PIPELINE_DEFINITION_ID`: smoke test 用 workflow id。未指定時は `3847`
 
 TROCCO API は `Authorization: Token {{API KEY}}` 形式の header で認証します。
 
@@ -139,6 +142,30 @@ https://<cloud-run-url>/mcp
 ```
 
 ChatGPT 側の connector 設定では、`trocco-mcp-auth-token` と同じ値を bearer token として設定してください。
+
+## HTTP smoke test
+
+Cloud Run deploy 後、ChatGPT に追加する前に MCP client で疎通確認します。
+
+```bash
+export MCP_ENDPOINT="https://<cloud-run-url>/mcp"
+export MCP_AUTH_TOKEN="$(gcloud secrets versions access latest --secret=trocco-mcp-auth-token)"
+npm run smoke:http
+```
+
+期待する summary:
+
+```json
+{
+  "ok": true,
+  "check": "build_workflow_audit_payload",
+  "pipeline_definition_id": 3847,
+  "payload_ok": true,
+  "workflow_name": "SH_PLUS_BQ_RAISE_data_daily_new",
+  "datamart_count": 31,
+  "datamart_error_count": 0
+}
+```
 
 ## Inspector / local verification
 
@@ -290,11 +317,8 @@ Error code:
 
 ## 次の確認ステップ
 
-1. `git pull` で最新の `main` を取得する
-2. `npm install` を実行し、新しい依存関係を取得する
-3. `npm run build` を実行する
-4. `npm run start:http` で HTTP server を起動する
-5. `/status` と `/mcp` の疎通を確認する
-6. Cloud Run に deploy する
-7. ChatGPT に `https://<cloud-run-url>/mcp` を追加する
-8. ChatGPT から `build_workflow_audit_payload` を実行し、監査に進む
+1. Cloud Run に最新の `main` を deploy する
+2. `/status` と `/mcp` の認証を確認する
+3. `npm run smoke:http` を実行する
+4. ChatGPT に `https://<cloud-run-url>/mcp` を追加する
+5. ChatGPT から `build_workflow_audit_payload` を実行し、監査に進む
