@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { attachDownstreamReferences, buildDatamartAuditFields } from "./auditModel.js";
 import { analyzeSql } from "./sqlAnalysis.js";
 import { TroccoClient, TroccoClientError, type TroccoDatamartDefinition, type TroccoWorkflow } from "./troccoClient.js";
 
@@ -102,7 +103,7 @@ server.tool(
         pipeline_definition_id: normalizedWorkflow.pipeline_definition_id,
         workflow_name: normalizedWorkflow.name,
         workflow: normalizedWorkflow,
-        datamarts,
+        datamarts: attachDownstreamReferences(datamarts),
         datamart_errors,
         raw: {
           workflow,
@@ -148,6 +149,10 @@ function normalizeWorkflow(workflow: TroccoWorkflow, requestedId: number) {
 function normalizeDatamart(datamart: TroccoDatamartDefinition, requestedId: number) {
   const bigqueryOption = isRecord(datamart.datamart_bigquery_option) ? datamart.datamart_bigquery_option : null;
   const sql = readBigQueryString(bigqueryOption, "query");
+  const sqlAnalysis = analyzeSql(sql);
+  const destinationDataset = readBigQueryString(bigqueryOption, "destination_dataset");
+  const destinationTable = readBigQueryString(bigqueryOption, "destination_table");
+  const writeDisposition = readBigQueryString(bigqueryOption, "write_disposition");
 
   return {
     datamart_definition_id: readNumber(datamart.id) ?? requestedId,
@@ -155,11 +160,17 @@ function normalizeDatamart(datamart: TroccoDatamartDefinition, requestedId: numb
     data_warehouse_type: readString(datamart.data_warehouse_type),
     datamart_bigquery_option: bigqueryOption,
     sql,
-    sql_analysis: analyzeSql(sql),
+    sql_analysis: sqlAnalysis,
     query_mode: readBigQueryString(bigqueryOption, "query_mode"),
-    destination_dataset: readBigQueryString(bigqueryOption, "destination_dataset"),
-    destination_table: readBigQueryString(bigqueryOption, "destination_table"),
-    write_disposition: readBigQueryString(bigqueryOption, "write_disposition"),
+    destination_dataset: destinationDataset,
+    destination_table: destinationTable,
+    write_disposition: writeDisposition,
+    ...buildDatamartAuditFields({
+      destinationDataset,
+      destinationTable,
+      writeDisposition,
+      sqlAnalysis,
+    }),
     merge_keys: readBigQueryStringArray(bigqueryOption, "merge_keys"),
     incremental_column: readBigQueryString(bigqueryOption, "incremental_column"),
     lookback_period: {
