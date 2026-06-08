@@ -63,12 +63,18 @@ function normalizeWorkflow(workflow: TroccoWorkflow, requestedId: number) {
     name: readString(workflow.name),
     tasks,
     task_dependencies: taskDependencies,
+    normalized_task_dependencies: taskDependencies.filter(isRecord).map((dependency) => ({
+      source_task_identifier: readString(dependency.source),
+      destination_task_identifier: readString(dependency.destination),
+      raw: dependency,
+    })),
     datamart_tasks: tasks
       .filter(isRecord)
       .filter((task) => task.type === "trocco_bigquery_datamart")
       .map((task) => ({
+        task_identifier: readString(task.key) ?? readString(task.identifier),
+        key: readString(task.key),
         identifier: readString(task.identifier),
-        name: readString(task.name),
         type: readString(task.type),
         definition_id: readNestedNumber(task, ["trocco_bigquery_datamart_config", "definition_id"]),
         raw: task,
@@ -84,11 +90,28 @@ function normalizeDatamart(datamart: TroccoDatamartDefinition, requestedId: numb
     name: readString(datamart.name),
     data_warehouse_type: readString(datamart.data_warehouse_type),
     datamart_bigquery_option: bigqueryOption,
-    sql: bigqueryOption ? readString(bigqueryOption.query) : undefined,
-    query_mode: bigqueryOption ? readString(bigqueryOption.query_mode) : undefined,
-    destination_dataset: bigqueryOption ? readString(bigqueryOption.destination_dataset) : undefined,
-    destination_table: bigqueryOption ? readString(bigqueryOption.destination_table) : undefined,
-    write_disposition: bigqueryOption ? readString(bigqueryOption.write_disposition) : undefined,
+    sql: readBigQueryString(bigqueryOption, "query"),
+    query_mode: readBigQueryString(bigqueryOption, "query_mode"),
+    destination_dataset: readBigQueryString(bigqueryOption, "destination_dataset"),
+    destination_table: readBigQueryString(bigqueryOption, "destination_table"),
+    write_disposition: readBigQueryString(bigqueryOption, "write_disposition"),
+    merge_keys: readBigQueryStringArray(bigqueryOption, "merge_keys"),
+    incremental_column: readBigQueryString(bigqueryOption, "incremental_column"),
+    lookback_period: {
+      column: readBigQueryString(bigqueryOption, "lookback_period_column"),
+      column_type: readBigQueryString(bigqueryOption, "lookback_period_column_type"),
+      timezone: readBigQueryString(bigqueryOption, "lookback_period_timezone"),
+      from: readBigQueryNumber(bigqueryOption, "lookback_period_from"),
+      to: readBigQueryNumber(bigqueryOption, "lookback_period_to"),
+      unit: readBigQueryString(bigqueryOption, "lookback_period_unit"),
+    },
+    before_load: readBigQueryString(bigqueryOption, "before_load"),
+    partitioning: {
+      type: readBigQueryString(bigqueryOption, "partitioning"),
+      time: readBigQueryString(bigqueryOption, "partitioning_time"),
+      field: readBigQueryString(bigqueryOption, "partitioning_field"),
+    },
+    clustering_fields: readBigQueryStringArray(bigqueryOption, "clustering_fields"),
   };
 }
 
@@ -128,6 +151,22 @@ function readString(value: unknown): string | undefined {
 
 function readNumber(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined;
+}
+
+function readBigQueryString(bigqueryOption: Record<string, unknown> | null, key: string): string | undefined {
+  return bigqueryOption ? readString(bigqueryOption[key]) : undefined;
+}
+
+function readBigQueryNumber(bigqueryOption: Record<string, unknown> | null, key: string): number | undefined {
+  return bigqueryOption ? readNumber(bigqueryOption[key]) : undefined;
+}
+
+function readBigQueryStringArray(bigqueryOption: Record<string, unknown> | null, key: string): string[] | undefined {
+  return bigqueryOption ? readStringArray(bigqueryOption[key]) : undefined;
 }
 
 function readNestedNumber(record: Record<string, unknown>, path: string[]): number | undefined {
