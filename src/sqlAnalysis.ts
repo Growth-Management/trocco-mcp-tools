@@ -63,7 +63,7 @@ function extractDestinations(sql: string): SqlDestination[] {
     ...extractTables(sql, new RegExp(`\\bcreate\\s+or\\s+replace\\s+table\\s+(${TABLE_IDENTIFIER_PATTERN})`, "gi")).map(
       (table) => ({ operation: "create_or_replace_table" as const, table }),
     ),
-    ...extractTables(sql, new RegExp(`\\binsert\\s+into\\s+(${TABLE_IDENTIFIER_PATTERN})`, "gi")).map((table) => ({
+    ...extractTables(sql, new RegExp(`\\binsert\\s+(?:into\\s+)?(${TABLE_IDENTIFIER_PATTERN})`, "gi")).map((table) => ({
       operation: "insert_into" as const,
       table,
     })),
@@ -71,7 +71,7 @@ function extractDestinations(sql: string): SqlDestination[] {
       operation: "delete_from" as const,
       table,
     })),
-    ...extractTables(sql, new RegExp(`\\bmerge\\s+${optionalInto()}(${TABLE_IDENTIFIER_PATTERN})`, "gi")).map((table) => ({
+    ...extractTables(sql, new RegExp(`\\bmerge\\s+(?:into\\s+)?(${TABLE_IDENTIFIER_PATTERN})`, "gi")).map((table) => ({
       operation: "merge_into" as const,
       table,
     })),
@@ -117,8 +117,4 @@ function normalizeTableIdentifier(table: string): string {
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
-}
-
-function optionalInto(): string {
-  return "(?:into\\s+)?";
 }
