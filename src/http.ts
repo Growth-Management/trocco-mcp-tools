@@ -8,7 +8,7 @@ const app = createMcpExpressApp({ host: "0.0.0.0" });
 const port = Number(process.env.PORT ?? 8080);
 const authToken = process.env.MCP_AUTH_TOKEN;
 
-app.get("/healthz", (_req: Request, res: Response) => {
+app.get("/status", (_req: Request, res: Response) => {
   res.status(200).json({ ok: true, service: "trocco-mcp-tools" });
 });
 
