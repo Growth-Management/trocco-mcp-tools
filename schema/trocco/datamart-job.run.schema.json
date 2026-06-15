@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Growth-Management/trocco-mcp-tools/schema/trocco/datamart-job.run.schema.json",
+  "title": "run_datamart_job",
+  "description": "Draft schema for guarded TROCCO datamart job execution. Endpoint and response fields must be confirmed against TROCCO API behavior.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["datamart_definition_id", "confirm", "run_reason"],
+  "properties": {
+    "datamart_definition_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "confirm": {
+      "type": "boolean",
+      "const": true
+    },
+    "run_reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "idempotency_key": {
+      "type": "string",
+      "description": "Optional caller-provided key if the TROCCO API supports or the MCP layer later records idempotency."
+    },
+    "parameters": {
+      "type": "object",
+      "description": "Optional run parameters. Keep empty unless confirmed by TROCCO API behavior.",
+      "additionalProperties": true
+    }
+  }
+}
