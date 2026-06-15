@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Growth-Management/trocco-mcp-tools/schema/trocco/datamart-definition.update.schema.json",
+  "title": "update_datamart_definition",
+  "description": "Draft schema for a guarded TROCCO datamart definition update action. Endpoint and exact mutable fields must be confirmed against TROCCO API behavior before enabling production use.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["datamart_definition_id", "patch", "confirm", "change_reason"],
+  "properties": {
+    "datamart_definition_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "patch": {
+      "type": "object",
+      "description": "Allowed update fields. Keep this allowlist narrow for audit-safe operation.",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "query": { "type": "string" },
+        "destination_dataset": { "type": "string" },
+        "destination_table": { "type": "string" },
+        "write_disposition": {
+          "type": "string",
+          "enum": ["truncate", "append", "incremental", "scd_type_2", "delete_insert", "merge"]
+        },
+        "incremental_column": { "type": "string" },
+        "merge_keys": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "lookback_period": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "column": { "type": "string" },
+            "column_type": { "type": "string" },
+            "timezone": { "type": "string" },
+            "from": { "type": "integer" },
+            "to": { "type": "integer" },
+            "unit": { "type": "string" }
+          }
+        }
+      }
+    },
+    "expected_current": {
+      "type": "object",
+      "description": "Optional guard values checked before update when implemented.",
+      "additionalProperties": true
+    },
+    "confirm": {
+      "type": "boolean",
+      "const": true
+    },
+    "change_reason": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
