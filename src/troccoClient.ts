@@ -70,6 +70,27 @@ export type TroccoDatamartDefinition = Record<string, unknown> & {
   datamart_bigquery_option?: Record<string, unknown>;
 };
 
+export type TroccoDatamartJob = Record<string, unknown> & {
+  id?: number;
+  datamart_definition_id?: number;
+  context_time?: string;
+};
+
+export type RunDatamartJobRequest = {
+  datamart_definition_id: number;
+  context_time?: string;
+  time_zone?: string;
+  memo?: string;
+  custom_variables?: Array<{
+    name: string;
+    value: string;
+  }>;
+};
+
+export type UpdateDatamartDefinitionRequest = {
+  datamart_bigquery_option: Record<string, unknown>;
+};
+
 const DEFAULT_BASE_URL = "https://trocco.io";
 
 export class TroccoClient {
@@ -97,17 +118,42 @@ export class TroccoClient {
     return this.get<TroccoDatamartDefinition>(`/api/datamart_definitions/${datamartDefinitionId}`);
   }
 
+  async runDatamartJob(request: RunDatamartJobRequest): Promise<TroccoDatamartJob> {
+    return this.post<TroccoDatamartJob>("/api/datamart_jobs", request);
+  }
+
+  async updateDatamartDefinition(
+    datamartDefinitionId: number,
+    request: UpdateDatamartDefinitionRequest,
+  ): Promise<TroccoDatamartDefinition> {
+    return this.patch<TroccoDatamartDefinition>(`/api/datamart_definitions/${datamartDefinitionId}`, request);
+  }
+
   private async get<T>(path: string): Promise<T> {
+    return this.request<T>("GET", path);
+  }
+
+  private async post<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>("POST", path, body);
+  }
+
+  private async patch<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>("PATCH", path, body);
+  }
+
+  private async request<T>(method: "GET" | "POST" | "PATCH", path: string, body?: unknown): Promise<T> {
     const endpoint = `${this.baseUrl}${path}`;
 
     let response: Response;
     try {
       response = await fetch(endpoint, {
-        method: "GET",
+        method,
         headers: {
           Authorization: `Token ${this.apiKey}`,
           Accept: "application/json",
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
         },
+        body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (error) {
       throw new TroccoClientError({
@@ -118,7 +164,7 @@ export class TroccoClient {
       });
     }
 
-    const body = await parseResponseBody(response);
+    const responseBody = await parseResponseBody(response);
 
     if (!response.ok) {
       throw new TroccoClientError({
@@ -126,11 +172,11 @@ export class TroccoClient {
         message: buildHttpErrorMessage(response.status),
         status: response.status,
         endpoint,
-        detail: body,
+        detail: responseBody,
       });
     }
 
-    return body as T;
+    return responseBody as T;
   }
 }
 
