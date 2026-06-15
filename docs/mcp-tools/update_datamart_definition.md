@@ -4,21 +4,31 @@
 
 Update selected TROCCO datamart definition settings through a guarded MCP action.
 
-This is the highest-risk action in the first action set because it can change BigQuery datamart behavior. Implement it after status and run actions are in place.
+This is the highest-risk action in the first action set because it can change BigQuery datamart behavior. Implement it after status and run actions are clarified.
 
-## Status
+## TROCCO endpoint
 
-Draft. The exact TROCCO API endpoint, request body shape, mutable fields, and response fields must be confirmed before production use.
+`PATCH /api/datamart_definitions/{datamart_definition_id}`
 
-## Input
+Confirmed behavior from TROCCO API docs:
+
+- Datamart definitions can be updated with this endpoint.
+- The DWH type itself cannot be changed.
+- BigQuery, Snowflake, and Databricks are listed as currently updateable DWH types.
+- For BigQuery `write_disposition`, API values are `append`, `truncate`, `incremental`, and `scd_type_2`.
+
+Audit-only inferred values such as `delete_insert` or `merge` should not be sent as BigQuery API `write_disposition` values.
+
+## MCP input
 
 ```json
 {
   "datamart_definition_id": 67890,
   "patch": {
-    "write_disposition": "delete_insert",
+    "write_disposition": "incremental",
     "incremental_column": "updated_at",
-    "merge_keys": ["id"]
+    "merge_keys": ["id"],
+    "on_matched_action": "upsert"
   },
   "expected_current": {
     "write_disposition": "append"
@@ -28,7 +38,7 @@ Draft. The exact TROCCO API endpoint, request body shape, mutable fields, and re
 }
 ```
 
-## Allowed patch fields
+## Initial allowed BigQuery patch fields
 
 Start with a narrow allowlist:
 
@@ -36,11 +46,23 @@ Start with a narrow allowlist:
 - `destination_dataset`
 - `destination_table`
 - `write_disposition`
+- `schema_evolution_mode`
 - `incremental_column`
 - `merge_keys`
-- `lookback_period`
+- `on_matched_action`
+- `lookback_period_column`
+- `lookback_period_column_type`
+- `lookback_period_timezone`
+- `lookback_period_from`
+- `lookback_period_to`
+- `lookback_period_unit`
+- `before_load`
+- `partitioning`
+- `partitioning_time`
+- `partitioning_field`
+- `clustering_fields`
 
-Do not add broad passthrough updates until TROCCO API behavior and rollback expectations are confirmed.
+The MCP implementation should wrap these values under `datamart_bigquery_option` when sending the TROCCO API request.
 
 ## Guardrails
 
@@ -56,14 +78,13 @@ Do not add broad passthrough updates until TROCCO API behavior and rollback expe
 {
   "ok": true,
   "datamart_definition_id": 67890,
-  "updated_fields": ["write_disposition", "incremental_column", "merge_keys"],
+  "updated_fields": ["write_disposition", "incremental_column", "merge_keys", "on_matched_action"],
   "raw": {}
 }
 ```
 
 ## Implementation notes
 
-- Implement after `get_datamart_job_status` and `run_datamart_job`.
 - Keep update behavior separate from read-only audit payload generation.
 - Prefer read-before-write validation before sending the update request.
 - Add docs for rollback or manual restore before allowing production usage.
