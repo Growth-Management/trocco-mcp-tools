@@ -6,28 +6,41 @@ Start a TROCCO datamart job for a specific datamart definition.
 
 This is a run/execute action and must be guarded more strictly than read-only audit tools.
 
-## Status
+## TROCCO endpoint
 
-Draft. The exact TROCCO API endpoint, supported parameters, idempotency behavior, and response fields must be confirmed before production use.
+`POST /api/datamart_jobs`
 
-## Input
+Confirmed behavior from TROCCO API docs:
+
+- `datamart_definition_id` is required.
+- Optional request fields include `context_time`, `time_zone`, `memo`, and `custom_variables`.
+- The response includes the executed datamart job `id`, `datamart_definition_id`, and `context_time`.
+
+## MCP input
 
 ```json
 {
   "datamart_definition_id": 67890,
   "confirm": true,
   "run_reason": "Validate corrected incremental settings after review",
-  "idempotency_key": "optional-key",
-  "parameters": {}
+  "context_time": "2026-06-15 15:30:00",
+  "time_zone": "Asia/Tokyo",
+  "memo": "Manual validation from TROCCO MCP",
+  "custom_variables": [
+    {
+      "name": "$target_date$",
+      "value": "2026-06-15"
+    }
+  ]
 }
 ```
 
 ## Guardrails
 
-- `confirm: true` is required.
-- `run_reason` is required and must explain why the job is being started.
-- Optional `parameters` must remain empty until TROCCO API behavior is confirmed.
+- `confirm: true` is required by the MCP layer.
+- `run_reason` is required by the MCP layer and should be sent as `memo` when `memo` is omitted.
 - The MCP tool should reject ambiguous identifiers and should not infer a datamart id from a name.
+- Custom variable names should remain explicitly wrapped with `$` when used.
 
 ## Normalized output
 
@@ -36,14 +49,14 @@ Draft. The exact TROCCO API endpoint, supported parameters, idempotency behavior
   "ok": true,
   "datamart_definition_id": 67890,
   "datamart_job_id": 12345,
-  "status": "queued",
+  "context_time": "2026-06-15 15:30:00",
   "raw": {}
 }
 ```
 
 ## Implementation notes
 
-- Implement after `get_datamart_job_status`.
+- Implement after a status/read strategy is decided.
 - Keep the client method separate from read-only methods.
 - Add smoke coverage for the guarded-failure path where `confirm` is omitted or false.
 - Only run a confirmed end-to-end smoke test in a safe environment.
