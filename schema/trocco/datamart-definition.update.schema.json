@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Growth-Management/trocco-mcp-tools/schema/trocco/datamart-definition.update.schema.json",
   "title": "update_datamart_definition",
-  "description": "Draft schema for a guarded TROCCO datamart definition update action. Endpoint and exact mutable fields must be confirmed against TROCCO API behavior before enabling production use.",
+  "description": "Guarded MCP input schema for PATCH /api/datamart_definitions/{datamart_definition_id}. BigQuery mutable fields are intentionally allowlisted for audit-safe operation.",
   "type": "object",
   "additionalProperties": false,
   "required": ["datamart_definition_id", "patch", "confirm", "change_reason"],
@@ -13,7 +13,7 @@
     },
     "patch": {
       "type": "object",
-      "description": "Allowed update fields. Keep this allowlist narrow for audit-safe operation.",
+      "description": "Allowed BigQuery datamart option fields. The MCP implementation should wrap these under datamart_bigquery_option when sending the TROCCO request.",
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
@@ -22,26 +22,50 @@
         "destination_table": { "type": "string" },
         "write_disposition": {
           "type": "string",
-          "enum": ["truncate", "append", "incremental", "scd_type_2", "delete_insert", "merge"]
+          "enum": ["append", "truncate", "incremental", "scd_type_2"]
         },
-        "incremental_column": { "type": "string" },
+        "schema_evolution_mode": {
+          "type": "string",
+          "enum": ["detect_only", "auto_add_column"]
+        },
+        "incremental_column": { "type": ["string", "null"] },
         "merge_keys": {
           "type": "array",
           "items": { "type": "string" },
           "minItems": 1,
           "uniqueItems": true
         },
-        "lookback_period": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "column": { "type": "string" },
-            "column_type": { "type": "string" },
-            "timezone": { "type": "string" },
-            "from": { "type": "integer" },
-            "to": { "type": "integer" },
-            "unit": { "type": "string" }
-          }
+        "on_matched_action": {
+          "type": ["string", "null"],
+          "enum": ["upsert", "skip", null]
+        },
+        "lookback_period_column": { "type": ["string", "null"] },
+        "lookback_period_column_type": {
+          "type": ["string", "null"],
+          "enum": ["TIMESTAMP", "DATETIME", "DATE", null]
+        },
+        "lookback_period_timezone": { "type": ["string", "null"] },
+        "lookback_period_from": { "type": ["integer", "null"] },
+        "lookback_period_to": { "type": ["integer", "null"] },
+        "lookback_period_unit": {
+          "type": ["string", "null"],
+          "enum": ["days", "hours", null]
+        },
+        "before_load": { "type": ["string", "null"] },
+        "partitioning": {
+          "type": ["string", "null"],
+          "enum": ["ingestion_time", "time_unit_column", null]
+        },
+        "partitioning_time": {
+          "type": ["string", "null"],
+          "enum": ["DAY", "HOUR", "MONTH", "YEAR", null]
+        },
+        "partitioning_field": { "type": ["string", "null"] },
+        "clustering_fields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 0,
+          "maxItems": 4
         }
       }
     },
