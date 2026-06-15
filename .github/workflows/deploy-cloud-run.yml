@@ -1,0 +1,66 @@
+name: Deploy Cloud Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Cloud Run service name
+        required: true
+        default: trocco-mcp-tools
+      region:
+        description: Cloud Run region
+        required: true
+        default: asia-northeast1
+      trocco_api_secret:
+        description: Secret Manager secret name for TROCCO_API_KEY
+        required: true
+        default: trocco-api-key
+      mcp_auth_secret:
+        description: Secret Manager secret name for MCP_AUTH_TOKEN
+        required: true
+        default: trocco-mcp-auth-token
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run build
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ inputs.service }}
+          region: ${{ inputs.region }}
+          source: .
+          env_vars: |
+            NODE_ENV=production
+          secrets: |
+            TROCCO_API_KEY=${{ inputs.trocco_api_secret }}:latest
+            MCP_AUTH_TOKEN=${{ inputs.mcp_auth_secret }}:latest
+
+      - name: Show service URL
+        run: echo "Cloud Run URL is ${{ steps.deploy.outputs.url }}"
