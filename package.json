@@ -15,7 +15,8 @@
     "dev": "tsx src/index.ts",
     "dev:http": "tsx src/http.ts",
     "inspector": "npx @modelcontextprotocol/inspector node dist/index.js",
-    "smoke:http": "node scripts/smoke-http.mjs"
+    "smoke:http": "node scripts/smoke-http.mjs",
+    "smoke:actions": "node scripts/smoke-datamart-actions.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.13.0",

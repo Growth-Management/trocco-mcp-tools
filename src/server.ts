@@ -4,6 +4,33 @@ import { attachDownstreamReferences, buildDatamartAuditFields } from "./auditMod
 import { analyzeSql } from "./sqlAnalysis.js";
 import { TroccoClient, TroccoClientError, type TroccoDatamartDefinition, type TroccoWorkflow } from "./troccoClient.js";
 
+const DatamartUpdatePatchSchema = z
+  .object({
+    query: z.string().optional(),
+    destination_dataset: z.string().optional(),
+    destination_table: z.string().optional(),
+    write_disposition: z.enum(["append", "truncate", "incremental", "scd_type_2"]).optional(),
+    schema_evolution_mode: z.enum(["detect_only", "auto_add_column"]).optional(),
+    incremental_column: z.string().nullable().optional(),
+    merge_keys: z.array(z.string()).min(1).optional(),
+    on_matched_action: z.enum(["upsert", "skip"]).nullable().optional(),
+    lookback_period_column: z.string().nullable().optional(),
+    lookback_period_column_type: z.enum(["TIMESTAMP", "DATETIME", "DATE"]).nullable().optional(),
+    lookback_period_timezone: z.string().nullable().optional(),
+    lookback_period_from: z.number().int().nullable().optional(),
+    lookback_period_to: z.number().int().nullable().optional(),
+    lookback_period_unit: z.enum(["days", "hours"]).nullable().optional(),
+    before_load: z.string().nullable().optional(),
+    partitioning: z.enum(["ingestion_time", "time_unit_column"]).nullable().optional(),
+    partitioning_time: z.enum(["DAY", "HOUR", "MONTH", "YEAR"]).nullable().optional(),
+    partitioning_field: z.string().nullable().optional(),
+    clustering_fields: z.array(z.string()).max(4).optional(),
+  })
+  .strict()
+  .refine((patch) => Object.keys(patch).length > 0, {
+    message: "patch must include at least one allowed field.",
+  });
+
 export function createTroccoMcpServer() {
   const server = new McpServer({
     name: "trocco-mcp-tools",
@@ -45,6 +72,122 @@ export function createTroccoMcpServer() {
           ok: true,
           ...normalizeDatamart(datamart, datamart_definition_id),
           raw: datamart,
+        });
+      } catch (error) {
+        return jsonContent(toErrorPayload(error));
+      }
+    },
+  );
+
+  server.tool(
+    "get_datamart_job_status",
+    "Return an explicit unsupported response until a TROCCO datamart job status endpoint is confirmed.",
+    {
+      datamart_job_id: z.number().int().positive(),
+      datamart_definition_id: z.number().int().positive().optional(),
+    },
+    async ({ datamart_job_id, datamart_definition_id }) =>
+      jsonContent({
+        ok: false,
+        datamart_job_id,
+        datamart_definition_id,
+        error: {
+          code: "unsupported_operation",
+          message:
+            "TROCCO API docs confirm POST /api/datamart_jobs, but a datamart job status GET endpoint has not been confirmed.",
+          detail: {
+            confirmed_datamart_job_endpoint: "POST /api/datamart_jobs",
+            unconfirmed_status_endpoint: "GET /api/datamart_jobs/{datamart_job_id}",
+          },
+        },
+      }),
+  );
+
+  server.tool(
+    "run_datamart_job",
+    "Run a TROCCO datamart job through POST /api/datamart_jobs. Requires confirm: true.",
+    {
+      datamart_definition_id: z.number().int().positive(),
+      confirm: z.literal(true),
+      run_reason: z.string().min(1),
+      context_time: z.string().optional(),
+      time_zone: z.string().optional(),
+      memo: z.string().optional(),
+      custom_variables: z
+        .array(
+          z
+            .object({
+              name: z.string().min(1),
+              value: z.string(),
+            })
+            .strict(),
+        )
+        .optional(),
+    },
+    async ({ datamart_definition_id, run_reason, context_time, time_zone, memo, custom_variables }) => {
+      try {
+        const client = new TroccoClient();
+        const job = await client.runDatamartJob({
+          datamart_definition_id,
+          context_time,
+          time_zone,
+          memo: memo ?? run_reason,
+          custom_variables,
+        });
+
+        return jsonContent({
+          ok: true,
+          datamart_definition_id: readNumber(job.datamart_definition_id) ?? datamart_definition_id,
+          datamart_job_id: readNumber(job.id),
+          context_time: readString(job.context_time),
+          raw: job,
+        });
+      } catch (error) {
+        return jsonContent(toErrorPayload(error));
+      }
+    },
+  );
+
+  server.tool(
+    "update_datamart_definition",
+    "Update selected BigQuery datamart definition fields through PATCH /api/datamart_definitions/{datamart_definition_id}. Requires confirm: true.",
+    {
+      datamart_definition_id: z.number().int().positive(),
+      patch: DatamartUpdatePatchSchema,
+      expected_current: z.record(z.unknown()).optional(),
+      confirm: z.literal(true),
+      change_reason: z.string().min(1),
+    },
+    async ({ datamart_definition_id, patch, expected_current, change_reason }) => {
+      try {
+        const client = new TroccoClient();
+        const current = await client.getDatamart(datamart_definition_id);
+        const mismatches = buildExpectedCurrentMismatches(current, expected_current);
+
+        if (mismatches.length > 0) {
+          return jsonContent({
+            ok: false,
+            datamart_definition_id,
+            error: {
+              code: "precondition_failed",
+              message: "Current datamart definition did not match expected_current values. Update was not sent.",
+              detail: {
+                mismatches,
+              },
+            },
+          });
+        }
+
+        const updated = await client.updateDatamartDefinition(datamart_definition_id, {
+          datamart_bigquery_option: patch,
+        });
+
+        return jsonContent({
+          ok: true,
+          datamart_definition_id: readNumber(updated.id) ?? datamart_definition_id,
+          updated_fields: Object.keys(patch),
+          change_reason,
+          raw: updated,
         });
       } catch (error) {
         return jsonContent(toErrorPayload(error));
@@ -188,6 +331,28 @@ function normalizeDatamart(datamart: TroccoDatamartDefinition, requestedId: numb
     },
     clustering_fields: readBigQueryStringArray(bigqueryOption, "clustering_fields"),
   };
+}
+
+function buildExpectedCurrentMismatches(
+  current: TroccoDatamartDefinition,
+  expectedCurrent: Record<string, unknown> | undefined,
+): Array<{ field: string; expected: unknown; actual: unknown }> {
+  if (!expectedCurrent) {
+    return [];
+  }
+
+  const bigqueryOption = isRecord(current.datamart_bigquery_option) ? current.datamart_bigquery_option : {};
+
+  return Object.entries(expectedCurrent)
+    .map(([field, expected]) => {
+      const actual = field in bigqueryOption ? bigqueryOption[field] : current[field];
+      return valuesEqual(actual, expected) ? null : { field, expected, actual };
+    })
+    .filter((mismatch): mismatch is { field: string; expected: unknown; actual: unknown } => mismatch !== null);
+}
+
+function valuesEqual(actual: unknown, expected: unknown): boolean {
+  return JSON.stringify(actual) === JSON.stringify(expected);
 }
 
 function jsonContent(value: unknown) {
