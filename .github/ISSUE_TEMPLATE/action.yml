@@ -1,0 +1,61 @@
+name: Action task
+description: Add or change an MCP action tool.
+title: "action: "
+labels: ["action"]
+body:
+  - type: dropdown
+    id: target_tool
+    attributes:
+      label: Target tool
+      options:
+        - update_datamart_definition
+        - run_datamart_job
+        - get_datamart_job_status
+        - other
+    validations:
+      required: true
+  - type: dropdown
+    id: action_type
+    attributes:
+      label: Action type
+      options:
+        - read/status
+        - write/update
+        - run/execute
+        - unknown
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What should this MCP action do?
+    validations:
+      required: true
+  - type: textarea
+    id: inputs
+    attributes:
+      label: Inputs
+      description: Required and optional input fields.
+  - type: textarea
+    id: outputs
+    attributes:
+      label: Outputs
+      description: Expected success and error payload fields.
+  - type: textarea
+    id: risk
+    attributes:
+      label: Operational risk
+      description: Production impact, confirmation requirements, rollback or stop condition.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Implementation checklist
+      options:
+        - label: Zod input validation is defined.
+        - label: Write/run actions require explicit confirmation where appropriate.
+        - label: The tool returns structured errors.
+        - label: Docs and schema changes are included or linked.
+        - label: Smoke-test behavior is documented.
