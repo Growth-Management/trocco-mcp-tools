@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: TROCCO MCP operation notes
+    url: https://github.com/Growth-Management/trocco-mcp-tools#readme
+    about: Check the current README before opening operational setup issues.
