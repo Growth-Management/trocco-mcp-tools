@@ -1,0 +1,50 @@
+name: Schema task
+description: Define or update request, response, and error schemas for TROCCO MCP tools.
+title: "schema: "
+labels: ["schema"]
+body:
+  - type: dropdown
+    id: target_tool
+    attributes:
+      label: Target tool
+      options:
+        - update_datamart_definition
+        - run_datamart_job
+        - get_datamart_job_status
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Which schema needs to be added or changed?
+    validations:
+      required: true
+  - type: checkboxes
+    id: schema_scope
+    attributes:
+      label: Schema scope
+      options:
+        - label: Request schema
+        - label: Response schema
+        - label: Error payload schema
+        - label: Normalized status or value mapping
+        - label: Example payloads
+  - type: textarea
+    id: required_fields
+    attributes:
+      label: Required fields
+      description: List required fields and why they are required.
+  - type: textarea
+    id: provisional_fields
+    attributes:
+      label: Provisional or unknown fields
+      description: List fields that still need TROCCO API confirmation.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: Write/run actions include an explicit confirmation field where appropriate.
+        - label: Examples avoid secrets and irreversible production operations.

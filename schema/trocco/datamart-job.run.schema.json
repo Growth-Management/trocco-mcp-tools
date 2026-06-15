@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Growth-Management/trocco-mcp-tools/schema/trocco/datamart-job.run.schema.json",
+  "title": "run_datamart_job",
+  "description": "Guarded MCP input schema for POST /api/datamart_jobs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["datamart_definition_id", "confirm", "run_reason"],
+  "properties": {
+    "datamart_definition_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "confirm": {
+      "type": "boolean",
+      "const": true
+    },
+    "run_reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "MCP-side operation reason. Send to TROCCO as memo unless an implementation chooses otherwise."
+    },
+    "context_time": {
+      "type": "string",
+      "description": "Optional queued-time custom variable expansion timestamp, for example 2023-05-19 00:00:00."
+    },
+    "time_zone": {
+      "type": "string",
+      "default": "Asia/Tokyo"
+    },
+    "memo": {
+      "type": "string",
+      "description": "Optional TROCCO job memo. If omitted, run_reason may be used."
+    },
+    "custom_variables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "value"],
+        "properties": {
+          "name": { "type": "string" },
+          "value": { "type": "string" }
+        }
+      }
+    }
+  }
+}

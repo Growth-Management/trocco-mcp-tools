@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Growth-Management/trocco-mcp-tools/schema/trocco/datamart-job.status.schema.json",
+  "title": "get_datamart_job_status",
+  "description": "Draft schema for reading TROCCO datamart job status. Endpoint and raw response fields must be confirmed against TROCCO API behavior.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["datamart_job_id"],
+  "properties": {
+    "datamart_job_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "datamart_definition_id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Optional guard or lookup context when the TROCCO endpoint requires a definition id."
+    }
+  },
+  "x-normalized-status-values": [
+    "queued",
+    "running",
+    "success",
+    "failed",
+    "canceled",
+    "unknown"
+  ]
+}

@@ -1,0 +1,44 @@
+name: Docs task
+description: Update README, tool docs, operation runbooks, or smoke-test notes.
+title: "docs: "
+labels: ["docs"]
+body:
+  - type: dropdown
+    id: target_tool
+    attributes:
+      label: Target tool
+      options:
+        - update_datamart_definition
+        - run_datamart_job
+        - get_datamart_job_status
+        - build_workflow_audit_payload
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What should be documented or clarified?
+    validations:
+      required: true
+  - type: checkboxes
+    id: doc_scope
+    attributes:
+      label: Documentation scope
+      options:
+        - label: README
+        - label: MCP tool specification
+        - label: Operation runbook
+        - label: Deployment or smoke-test notes
+        - label: Risk, rollback, or stop condition
+  - type: textarea
+    id: known_facts
+    attributes:
+      label: Confirmed facts
+      description: List confirmed TROCCO API behavior, links, or examples.
+  - type: textarea
+    id: unknowns
+    attributes:
+      label: Unknowns or assumptions
+      description: Mark unconfirmed behavior explicitly.

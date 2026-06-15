@@ -1,0 +1,57 @@
+name: Client task
+description: Add or update TROCCO API client behavior.
+title: "client: "
+labels: ["client"]
+body:
+  - type: dropdown
+    id: target_tool
+    attributes:
+      label: Target tool
+      options:
+        - update_datamart_definition
+        - run_datamart_job
+        - get_datamart_job_status
+        - other
+    validations:
+      required: true
+  - type: dropdown
+    id: method
+    attributes:
+      label: HTTP method
+      options:
+        - GET
+        - POST
+        - PATCH
+        - PUT
+        - DELETE
+        - unknown
+    validations:
+      required: true
+  - type: input
+    id: endpoint
+    attributes:
+      label: TROCCO endpoint
+      description: Use unknown when not confirmed.
+      placeholder: /api/...
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What client behavior should be implemented?
+    validations:
+      required: true
+  - type: textarea
+    id: error_handling
+    attributes:
+      label: Error handling
+      description: Expected status codes and normalized error behavior.
+  - type: checkboxes
+    id: verification
+    attributes:
+      label: Verification
+      options:
+        - label: Endpoint and method are confirmed against TROCCO API documentation or observed behavior.
+        - label: Authentication remains server-side.
+        - label: `npm run build` passes.
