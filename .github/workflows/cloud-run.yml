@@ -1,0 +1,152 @@
+name: Cloud Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Choose describe to inspect the current revision, or deploy to publish this ref."
+        required: true
+        default: describe
+        type: choice
+        options:
+          - describe
+          - deploy
+      project_id:
+        description: "Google Cloud project id."
+        required: true
+        type: string
+      region:
+        description: "Cloud Run region."
+        required: true
+        default: asia-northeast1
+        type: string
+      service:
+        description: "Cloud Run service name."
+        required: true
+        default: trocco-mcp-tools
+        type: string
+      trocco_api_key_secret:
+        description: "Secret Manager secret name for TROCCO_API_KEY."
+        required: true
+        default: trocco-api-key
+        type: string
+      mcp_auth_token_secret:
+        description: "Secret Manager secret name for MCP_AUTH_TOKEN."
+        required: true
+        default: trocco-mcp-auth-token
+        type: string
+      run_smoke:
+        description: "Run MCP smoke tests after deploy. Requires GitHub secret MCP_AUTH_TOKEN."
+        required: true
+        default: false
+        type: boolean
+      pipeline_definition_id:
+        description: "Workflow id for smoke:http."
+        required: true
+        default: "3847"
+        type: string
+      datamart_job_id:
+        description: "Dummy job id for smoke:actions guarded status check."
+        required: true
+        default: "1"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  cloud-run:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ID: ${{ inputs.project_id }}
+      REGION: ${{ inputs.region }}
+      SERVICE: ${{ inputs.service }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Show gcloud context
+        run: |
+          gcloud config set project "$PROJECT_ID"
+          gcloud auth list
+          gcloud config list
+
+      - name: Describe current Cloud Run revision
+        id: describe_before
+        shell: bash
+        run: |
+          set +e
+          gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(status.latestReadyRevisionName,status.traffic[0].revisionName,status.url)'
+          status=$?
+          set -e
+
+          if [ "$status" -ne 0 ] && [ "${{ inputs.mode }}" = "describe" ]; then
+            echo "Cloud Run service was not found or could not be described."
+            exit "$status"
+          fi
+
+      - name: Deploy Cloud Run service
+        if: ${{ inputs.mode == 'deploy' }}
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --source . \
+            --region "$REGION" \
+            --allow-unauthenticated \
+            --set-secrets TROCCO_API_KEY=${{ inputs.trocco_api_key_secret }}:latest,MCP_AUTH_TOKEN=${{ inputs.mcp_auth_token_secret }}:latest
+
+      - name: Describe Cloud Run revision after operation
+        id: describe_after
+        shell: bash
+        run: |
+          url="$(gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(status.url)')"
+
+          gcloud run services describe "$SERVICE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --format='value(status.latestReadyRevisionName,status.traffic[0].revisionName,status.url)'
+
+          echo "service_url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js for smoke tests
+        if: ${{ inputs.run_smoke }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies for smoke tests
+        if: ${{ inputs.run_smoke }}
+        run: npm install
+
+      - name: Run HTTP smoke test
+        if: ${{ inputs.run_smoke }}
+        env:
+          MCP_ENDPOINT: ${{ steps.describe_after.outputs.service_url }}/mcp
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
+          PIPELINE_DEFINITION_ID: ${{ inputs.pipeline_definition_id }}
+        run: npm run smoke:http
+
+      - name: Run guarded datamart action smoke test
+        if: ${{ inputs.run_smoke }}
+        env:
+          MCP_ENDPOINT: ${{ steps.describe_after.outputs.service_url }}/mcp
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
+          DATAMART_JOB_ID: ${{ inputs.datamart_job_id }}
+        run: npm run smoke:actions
