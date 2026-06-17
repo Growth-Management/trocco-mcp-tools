@@ -1,10 +1,12 @@
 # trocco-mcp-tools
 
-TROCCO API を Model Context Protocol (MCP) から扱うための読み取り専用ツール群です。TROCCO workflow と BigQuery datamart の差分監査に必要な情報を取得し、ChatGPT から監査エージェントが SQL、出力先、更新方式、依存関係、リスク候補を整理できる状態を目指します。
+TROCCO API を Model Context Protocol (MCP) から扱うためのツール群です。TROCCO workflow と BigQuery datamart の差分監査に必要な情報を取得し、ChatGPT から監査エージェントが SQL、出力先、更新方式、依存関係、リスク候補を整理できる状態を目指します。
+
+監査用途の主経路は読み取り専用ツールです。datamart の実行・更新系 action は、明示確認付きの guarded operation として限定的に扱います。
 
 ## 現在の優先方針
 
-現在の最優先は、実監査そのものではなく、この TROCCO MCP server を ChatGPT から追加・接続できる状態にすることです。
+現在の最優先は、この TROCCO MCP server を ChatGPT から追加・接続し、監査 payload と guarded datamart action の smoke 確認を終えることです。
 
 進め方:
 
@@ -12,7 +14,8 @@ TROCCO API を Model Context Protocol (MCP) から扱うための読み取り専
 2. `TROCCO_API_KEY` を安全に server 側へ注入する
 3. ChatGPT から MCP server を追加する
 4. ChatGPT から `build_workflow_audit_payload` を呼べることを確認する
-5. 以後の監査は ChatGPT から MCP tool を利用して実行する
+5. `npm run smoke:actions` で datamart action tools の公開状態と guarded response を確認する
+6. 以後の監査は ChatGPT から MCP tool を利用して実行する
 
 ## 目的
 
@@ -30,7 +33,11 @@ TROCCO API を Model Context Protocol (MCP) から扱うための読み取り専
 - risk flags
 - downstream references
 
-初期段階では読み取り専用のツールに限定し、TROCCO 側の設定変更や実行操作は対象外とします。
+また、運用確認済みの範囲で次の guarded action を提供します。
+
+- `get_datamart_job_status`: status endpoint 未確認のため、現在は structured unsupported response を返す
+- `run_datamart_job`: `confirm: true` と `run_reason` を必須にして datamart job を実行する
+- `update_datamart_definition`: `confirm: true` と `change_reason` を必須にし、allowlist と任意の read-before-write guard で datamart definition を更新する
 
 ## 実装構成
 
@@ -45,6 +52,7 @@ TROCCO API を Model Context Protocol (MCP) から扱うための読み取り専
 - SQL analysis: `src/sqlAnalysis.ts`
 - Audit model: `src/auditModel.ts`
 - HTTP smoke test: `scripts/smoke-http.mjs`
+- Datamart action smoke test: `scripts/smoke-datamart-actions.mjs`
 
 ## Transport
 
@@ -77,6 +85,7 @@ TROCCO API 接続に必要な認証情報は環境変数から読み込みます
 - `MCP_AUTH_TOKEN`: HTTP MCP endpoint 用の bearer token
 - `MCP_ENDPOINT`: smoke test 用 MCP endpoint URL
 - `PIPELINE_DEFINITION_ID`: smoke test 用 workflow id。未指定時は `3847`
+- `DATAMART_JOB_ID`: datamart action smoke test 用 job id。未指定時は `1`
 
 TROCCO API は `Authorization: Token {{API KEY}}` 形式の header で認証します。
 
@@ -167,6 +176,14 @@ npm run smoke:http
 }
 ```
 
+Datamart action tools の公開状態も確認します。
+
+```bash
+npm run smoke:actions
+```
+
+現時点の `smoke:actions` は、3 つの datamart action tools が listTools に出ることと、`get_datamart_job_status` が guarded unsupported response を返すことを確認します。`run_datamart_job` と `update_datamart_definition` の本番呼び出しは、対象 datamart、実行理由、停止条件、復旧方法が明確な場合だけ行ってください。
+
 ## Inspector / local verification
 
 Inspector で stdio server を確認します。
@@ -250,6 +267,64 @@ Output の主な項目:
 }
 ```
 
+### `get_datamart_job_status`
+
+Datamart job status endpoint が未確認のため、現在は TROCCO API を呼ばずに structured unsupported response を返します。
+
+Input:
+
+```json
+{
+  "datamart_job_id": 12345,
+  "datamart_definition_id": 67890
+}
+```
+
+### `run_datamart_job`
+
+TROCCO datamart job を実行します。実行系 action のため、`confirm: true` と `run_reason` が必須です。
+
+TROCCO endpoint:
+
+- `POST /api/datamart_jobs`
+
+Input:
+
+```json
+{
+  "datamart_definition_id": 67890,
+  "confirm": true,
+  "run_reason": "manual verification after reviewed datamart change",
+  "context_time": "2026-06-17 00:00:00",
+  "time_zone": "Asia/Tokyo"
+}
+```
+
+### `update_datamart_definition`
+
+TROCCO datamart definition の BigQuery option を更新します。更新系 action のため、`confirm: true` と `change_reason` が必須です。`patch` は allowlist 済みの field のみ受け付けます。
+
+TROCCO endpoint:
+
+- `PATCH /api/datamart_definitions/{datamart_definition_id}`
+
+Input:
+
+```json
+{
+  "datamart_definition_id": 67890,
+  "confirm": true,
+  "change_reason": "align incremental settings after audit review",
+  "expected_current": {
+    "write_disposition": "append"
+  },
+  "patch": {
+    "write_disposition": "incremental",
+    "incremental_column": "updated_at"
+  }
+}
+```
+
 ## SQL analysis
 
 `sql_analysis` は SQL コメントを除去したうえで、監査に必要な最低限の候補を抽出します。
@@ -320,5 +395,7 @@ Error code:
 1. Cloud Run に最新の `main` を deploy する
 2. `/status` と `/mcp` の認証を確認する
 3. `npm run smoke:http` を実行する
-4. ChatGPT に `https://<cloud-run-url>/mcp` を追加する
-5. ChatGPT から `build_workflow_audit_payload` を実行し、監査に進む
+4. `npm run smoke:actions` を実行する
+5. ChatGPT に `https://<cloud-run-url>/mcp` を追加する
+6. ChatGPT から `build_workflow_audit_payload` を実行し、監査に進む
+7. Datamart action を本番利用する前に、`run_datamart_job` の実レスポンスと datamart job status 取得 endpoint の有無を確認する
