@@ -4,6 +4,32 @@ import { attachDownstreamReferences, buildDatamartAuditFields } from "./auditMod
 import { analyzeSql } from "./sqlAnalysis.js";
 import { TroccoClient, TroccoClientError, type TroccoDatamartDefinition, type TroccoWorkflow } from "./troccoClient.js";
 
+const DatamartCreateBigQueryOptionSchema = z
+  .object({
+    bigquery_connection_id: z.number().int().positive(),
+    query: z.string().min(1),
+    query_mode: z.enum(["insert"]).optional(),
+    destination_dataset: z.string().min(1),
+    destination_table: z.string().min(1),
+    write_disposition: z.enum(["append", "truncate", "incremental", "scd_type_2"]),
+    schema_evolution_mode: z.enum(["detect_only", "auto_add_column"]).optional(),
+    incremental_column: z.string().nullable().optional(),
+    merge_keys: z.array(z.string()).min(1).optional(),
+    on_matched_action: z.enum(["upsert", "skip"]).nullable().optional(),
+    lookback_period_column: z.string().nullable().optional(),
+    lookback_period_column_type: z.enum(["TIMESTAMP", "DATETIME", "DATE"]).nullable().optional(),
+    lookback_period_timezone: z.string().nullable().optional(),
+    lookback_period_from: z.number().int().nullable().optional(),
+    lookback_period_to: z.number().int().nullable().optional(),
+    lookback_period_unit: z.enum(["days", "hours"]).nullable().optional(),
+    before_load: z.string().nullable().optional(),
+    partitioning: z.enum(["ingestion_time", "time_unit_column"]).nullable().optional(),
+    partitioning_time: z.enum(["DAY", "HOUR", "MONTH", "YEAR"]).nullable().optional(),
+    partitioning_field: z.string().nullable().optional(),
+    clustering_fields: z.array(z.string()).max(4).optional(),
+  })
+  .strict();
+
 const DatamartUpdatePatchSchema = z
   .object({
     query: z.string().optional(),
@@ -141,6 +167,45 @@ export function createTroccoMcpServer() {
           datamart_job_id: readNumber(job.id),
           context_time: readString(job.context_time),
           raw: job,
+        });
+      } catch (error) {
+        return jsonContent(toErrorPayload(error));
+      }
+    },
+  );
+
+  server.tool(
+    "create_datamart_definition",
+    "Create a BigQuery datamart definition through POST /api/datamart_definitions. Requires confirm: true.",
+    {
+      name: z.string().min(1),
+      description: z.string().optional(),
+      data_warehouse_type: z.literal("bigquery").optional(),
+      datamart_bigquery_option: DatamartCreateBigQueryOptionSchema,
+      confirm: z.literal(true),
+      create_reason: z.string().min(1),
+    },
+    async ({ name, description, data_warehouse_type, datamart_bigquery_option, create_reason }) => {
+      try {
+        const client = new TroccoClient();
+        const created = await client.createDatamartDefinition({
+          name,
+          description,
+          data_warehouse_type: data_warehouse_type ?? "bigquery",
+          datamart_bigquery_option: {
+            query_mode: "insert",
+            ...datamart_bigquery_option,
+          },
+        });
+
+        return jsonContent({
+          ok: true,
+          datamart_definition_id: readNumber(created.id),
+          name: readString(created.name) ?? name,
+          data_warehouse_type: readString(created.data_warehouse_type) ?? "bigquery",
+          created_fields: ["name", "description", "data_warehouse_type", "datamart_bigquery_option"],
+          create_reason,
+          raw: created,
         });
       } catch (error) {
         return jsonContent(toErrorPayload(error));
