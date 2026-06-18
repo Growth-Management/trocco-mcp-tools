@@ -19,6 +19,7 @@ if (!token) {
 const expectedTools = [
   "get_datamart_job_status",
   "run_datamart_job",
+  "create_datamart_definition",
   "update_datamart_definition",
 ];
 
