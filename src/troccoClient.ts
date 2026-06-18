@@ -76,6 +76,13 @@ export type TroccoDatamartJob = Record<string, unknown> & {
   context_time?: string;
 };
 
+export type CreateDatamartDefinitionRequest = {
+  name: string;
+  description?: string;
+  data_warehouse_type: "bigquery";
+  datamart_bigquery_option: Record<string, unknown>;
+};
+
 export type RunDatamartJobRequest = {
   datamart_definition_id: number;
   context_time?: string;
@@ -116,6 +123,10 @@ export class TroccoClient {
 
   async getDatamart(datamartDefinitionId: number): Promise<TroccoDatamartDefinition> {
     return this.get<TroccoDatamartDefinition>(`/api/datamart_definitions/${datamartDefinitionId}`);
+  }
+
+  async createDatamartDefinition(request: CreateDatamartDefinitionRequest): Promise<TroccoDatamartDefinition> {
+    return this.post<TroccoDatamartDefinition>("/api/datamart_definitions", request);
   }
 
   async runDatamartJob(request: RunDatamartJobRequest): Promise<TroccoDatamartJob> {
