@@ -1,6 +1,6 @@
 # trocco-mcp-tools
 
-TROCCO API を Model Context Protocol (MCP) から扱うための読み取り専用ツール群です。TROCCO workflow と BigQuery datamart の差分監査に必要な情報を取得し、ChatGPT から監査エージェントが SQL、出力先、更新方式、依存関係、リスク候補を整理できる状態を目指します。
+TROCCO API を Model Context Protocol (MCP) から扱うためのツール群です。TROCCO workflow と BigQuery datamart の差分監査に必要な情報を取得し、ChatGPT から監査エージェントが SQL、出力先、更新方式、依存関係、リスク候補を整理できる状態を目指します。現在は読み取り系を中心にしつつ、datamart definition / datamart job については明示的な安全条件付きの操作系ツールも提供します。
 
 ## 現在の優先方針
 
@@ -30,7 +30,7 @@ TROCCO API を Model Context Protocol (MCP) から扱うための読み取り専
 - risk flags
 - downstream references
 
-初期段階では読み取り専用のツールに限定し、TROCCO 側の設定変更や実行操作は対象外とします。
+初期段階では監査に必要な読み取り系を主軸にし、操作系は BigQuery datamart definition と datamart job に限定します。workflow definition create/update と transfer definition create/update は、task/dependency 破壊リスクや connector 種別差が大きいため第2弾以降の対象です。
 
 ## 実装構成
 
@@ -45,6 +45,7 @@ TROCCO API を Model Context Protocol (MCP) から扱うための読み取り専
 - SQL analysis: `src/sqlAnalysis.ts`
 - Audit model: `src/auditModel.ts`
 - HTTP smoke test: `scripts/smoke-http.mjs`
+- Datamart action smoke test: `scripts/smoke-datamart-actions.mjs`
 
 ## Transport
 
@@ -77,6 +78,7 @@ TROCCO API 接続に必要な認証情報は環境変数から読み込みます
 - `MCP_AUTH_TOKEN`: HTTP MCP endpoint 用の bearer token
 - `MCP_ENDPOINT`: smoke test 用 MCP endpoint URL
 - `PIPELINE_DEFINITION_ID`: smoke test 用 workflow id。未指定時は `3847`
+- `DATAMART_JOB_ID`: datamart action smoke test 用 job id。未指定時は `1`
 
 TROCCO API は `Authorization: Token {{API KEY}}` 形式の header で認証します。
 
@@ -167,6 +169,16 @@ npm run smoke:http
 }
 ```
 
+Datamart action tools の一覧確認をします。
+
+```bash
+export MCP_ENDPOINT="https://<cloud-run-url>/mcp"
+export MCP_AUTH_TOKEN="$(gcloud secrets versions access latest --secret=trocco-mcp-auth-token)"
+npm run smoke:actions
+```
+
+この smoke test は `get_datamart_job_status` の guarded response も確認します。`create_datamart_definition` や `update_datamart_definition` の実 write は実行しません。
+
 ## Inspector / local verification
 
 Inspector で stdio server を確認します。
@@ -250,6 +262,92 @@ Output の主な項目:
 }
 ```
 
+### `create_datamart_definition`
+
+BigQuery datamart definition を作成します。操作系 tool のため、`confirm: true` と `create_reason` が必須です。
+
+TROCCO endpoint:
+
+- `POST /api/datamart_definitions`
+
+Input example:
+
+```json
+{
+  "name": "SH_PLUS_AGGREGATION_example",
+  "description": "example aggregation datamart",
+  "datamart_bigquery_option": {
+    "bigquery_connection_id": 345,
+    "query": "select 1 as id",
+    "destination_dataset": "dataset_aggregation_tables",
+    "destination_table": "example_table",
+    "write_disposition": "truncate",
+    "partitioning": "time_unit_column",
+    "partitioning_time": "DAY",
+    "partitioning_field": "date_jst"
+  },
+  "confirm": true,
+  "create_reason": "Create a new AGGREGATION datamart for the audited SOURCE->AGGREGATION flow."
+}
+```
+
+### `run_datamart_job`
+
+既存の datamart definition を実行します。操作系 tool のため、`confirm: true` と `run_reason` が必須です。
+
+TROCCO endpoint:
+
+- `POST /api/datamart_jobs`
+
+Input example:
+
+```json
+{
+  "datamart_definition_id": 12345,
+  "confirm": true,
+  "run_reason": "Validate the new datamart definition after review."
+}
+```
+
+### `update_datamart_definition`
+
+既存の BigQuery datamart definition の一部設定を更新します。操作系 tool のため、`confirm: true` と `change_reason` が必須です。
+
+TROCCO endpoint:
+
+- `PATCH /api/datamart_definitions/{datamart_definition_id}`
+
+Input example:
+
+```json
+{
+  "datamart_definition_id": 12345,
+  "patch": {
+    "write_disposition": "truncate",
+    "partitioning": "time_unit_column",
+    "partitioning_time": "DAY",
+    "partitioning_field": "date_jst"
+  },
+  "expected_current": {
+    "write_disposition": "append"
+  },
+  "confirm": true,
+  "change_reason": "Align write mode with the SOURCE->AGGREGATION audit policy."
+}
+```
+
+## Action tool safety
+
+操作系 tool は、監査支援のために限定的に提供します。
+
+- `confirm: true` がない入力は schema validation で拒否されます
+- `create_reason` / `change_reason` / `run_reason` のいずれかを必須にします
+- create/update の BigQuery option は allowlist された項目のみ受け付けます
+- `update_datamart_definition` は `expected_current` が指定され、現在値と一致しない場合は PATCH を送信しません
+- workflow definition と transfer definition の create/update はこの phase では対象外です
+
+追加の運用メモは `docs/definition-actions.md` を参照してください。
+
 ## SQL analysis
 
 `sql_analysis` は SQL コメントを除去したうえで、監査に必要な最低限の候補を抽出します。
@@ -317,8 +415,9 @@ Error code:
 
 ## 次の確認ステップ
 
-1. Cloud Run に最新の `main` を deploy する
+1. Cloud Run に最新の branch を deploy する
 2. `/status` と `/mcp` の認証を確認する
 3. `npm run smoke:http` を実行する
-4. ChatGPT に `https://<cloud-run-url>/mcp` を追加する
-5. ChatGPT から `build_workflow_audit_payload` を実行し、監査に進む
+4. `npm run smoke:actions` を実行する
+5. ChatGPT に `https://<cloud-run-url>/mcp` を追加する
+6. ChatGPT から `build_workflow_audit_payload` を実行し、監査に進む
