@@ -32,7 +32,6 @@ jobs:
   deploy:
     name: Deploy trocco-mcp-tools
     runs-on: ubuntu-latest
-    environment: production
 
     steps:
       - name: Check deployment configuration
