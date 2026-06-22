@@ -33,6 +33,7 @@ const DatamartCreateBigQueryOptionSchema = z
 const DatamartUpdatePatchSchema = z
   .object({
     query: z.string().optional(),
+    query_mode: z.enum(["insert"]).optional(),
     destination_dataset: z.string().optional(),
     destination_table: z.string().optional(),
     write_disposition: z.enum(["append", "truncate", "incremental", "scd_type_2"]).optional(),
