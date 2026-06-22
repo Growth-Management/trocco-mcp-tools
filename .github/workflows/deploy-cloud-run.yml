@@ -2,36 +2,56 @@ name: Deploy Cloud Run
 
 on:
   workflow_dispatch:
-    inputs:
-      project_id:
-        description: Google Cloud project id
-        required: true
-      service:
-        description: Cloud Run service name
-        required: true
-        default: trocco-mcp-tools
-      region:
-        description: Cloud Run region
-        required: true
-        default: asia-northeast1
-      trocco_api_secret:
-        description: Secret Manager secret name for TROCCO_API_KEY
-        required: true
-        default: trocco-api-key
-      mcp_auth_secret:
-        description: Secret Manager secret name for MCP_AUTH_TOKEN
-        required: true
-        default: trocco-mcp-auth-token
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/deploy-cloud-run.yml
+      - Dockerfile
+      - .dockerignore
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - src/**
+      - scripts/**
 
 permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: cloud-run-deploy
+  cancel-in-progress: false
+
+env:
+  CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE || 'trocco-mcp-tools' }}
+  CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION || 'asia-northeast1' }}
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+
 jobs:
   deploy:
+    name: Deploy trocco-mcp-tools
     runs-on: ubuntu-latest
+    environment: production
 
     steps:
+      - name: Check deployment configuration
+        run: |
+          missing=0
+          for name in GCP_PROJECT_ID GCP_WORKLOAD_IDENTITY_PROVIDER GCP_SERVICE_ACCOUNT; do
+            if [ -z "${!name}" ]; then
+              echo "Missing required repository variable: ${name}" >&2
+              missing=1
+            fi
+          done
+          if [ "${missing}" -ne 0 ]; then
+            echo "Configure the missing repository variables before deploying." >&2
+            exit 1
+          fi
+        env:
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -41,31 +61,46 @@ jobs:
           node-version: '24'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build
         run: npm run build
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@v2
         with:
-          project_id: ${{ inputs.project_id }}
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
 
       - name: Deploy to Cloud Run
-        id: deploy
-        uses: google-github-actions/deploy-cloudrun@v3
-        with:
-          project_id: ${{ inputs.project_id }}
-          service: ${{ inputs.service }}
-          region: ${{ inputs.region }}
-          source: .
-          env_vars: |
-            NODE_ENV=production
-          secrets: |
-            TROCCO_API_KEY=${{ inputs.trocco_api_secret }}:latest
-            MCP_AUTH_TOKEN=${{ inputs.mcp_auth_secret }}:latest
+        run: |
+          gcloud run deploy "${CLOUD_RUN_SERVICE}" \
+            --source . \
+            --project "${GCP_PROJECT_ID}" \
+            --region "${CLOUD_RUN_REGION}" \
+            --allow-unauthenticated \
+            --set-secrets TROCCO_API_KEY=trocco-api-key:latest,MCP_AUTH_TOKEN=trocco-mcp-auth-token:latest
 
-      - name: Show service URL
-        run: echo "Cloud Run URL is ${{ steps.deploy.outputs.url }}"
+      - name: Resolve deployed MCP endpoint
+        id: endpoint
+        run: |
+          service_url="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+            --project "${GCP_PROJECT_ID}" \
+            --region "${CLOUD_RUN_REGION}" \
+            --format='value(status.url)')"
+          echo "service_url=${service_url}" >> "$GITHUB_OUTPUT"
+          echo "mcp_endpoint=${service_url}/mcp" >> "$GITHUB_OUTPUT"
+          echo "Cloud Run service URL: ${service_url}"
+          echo "MCP endpoint: ${service_url}/mcp"
+
+      - name: Smoke test MCP endpoint
+        run: |
+          export MCP_ENDPOINT="${{ steps.endpoint.outputs.mcp_endpoint }}"
+          export MCP_AUTH_TOKEN="$(gcloud secrets versions access latest \
+            --project "${GCP_PROJECT_ID}" \
+            --secret=trocco-mcp-auth-token)"
+          npm run smoke:http
+          npm run smoke:actions
