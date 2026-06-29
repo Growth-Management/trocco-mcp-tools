@@ -5,16 +5,34 @@ import { analyzeSql } from "./sqlAnalysis.js";
 import { TroccoClient, TroccoClientError, type TroccoDatamartDefinition, type TroccoWorkflow } from "./troccoClient.js";
 
 const TaskIdentifierSchema = z.union([z.string().min(1), z.number().int().nonnegative()]);
+const TaskKeySchema = z.string().min(1);
 const LooseConfigSchema = z.object({}).passthrough();
 const IfElseConfigSchema = z.object({
-  condition: LooseConfigSchema.optional(),
+  name: z.string().min(1).optional(),
+  condition_groups: z.object({
+    set_type: z.enum(["and", "or"]),
+    conditions: z.array(z.object({
+      task_key: z.string().min(1).nullable().optional(),
+      variable: z.string().min(1),
+      operator: z.string().min(1),
+      value: z.string(),
+    }).passthrough()).min(1),
+  }).passthrough(),
+  destinations: z.object({
+    if: z.array(z.string()),
+    else: z.array(z.string()),
+  }).passthrough(),
 }).passthrough();
 const SlackNotifyConfigSchema = z.object({
+  name: z.string().min(1).optional(),
+  connection_id: z.number().int().positive().optional(),
   message: z.string().optional(),
+  ignore_error: z.boolean().optional(),
 }).passthrough();
 
 const BigQueryDataCheckTaskSchema = z.object({
-  task_identifier: TaskIdentifierSchema,
+  key: TaskKeySchema.optional(),
+  task_identifier: TaskIdentifierSchema.optional(),
   type: z.literal("bigquery_data_check"),
   bigquery_data_check_config: z.object({
     connection_id: z.number().int().positive(),
@@ -28,13 +46,15 @@ const BigQueryDataCheckTaskSchema = z.object({
 }).passthrough();
 
 const IfElseTaskSchema = z.object({
-  task_identifier: TaskIdentifierSchema,
+  key: TaskKeySchema.optional(),
+  task_identifier: TaskIdentifierSchema.optional(),
   type: z.literal("if_else"),
   if_else_config: IfElseConfigSchema,
 }).passthrough();
 
 const SlackNotifyTaskSchema = z.object({
-  task_identifier: TaskIdentifierSchema,
+  key: TaskKeySchema.optional(),
+  task_identifier: TaskIdentifierSchema.optional(),
   type: z.literal("slack_notify"),
   slack_notify_config: SlackNotifyConfigSchema,
 }).passthrough();
@@ -43,12 +63,18 @@ const WorkflowPatchTaskSchema = z.discriminatedUnion("type", [
   BigQueryDataCheckTaskSchema,
   IfElseTaskSchema,
   SlackNotifyTaskSchema,
-]);
+]).refine((task) => readUpsertTaskKey(task) !== undefined, {
+  message: "upsert task must include key, or a string/number task_identifier that can be used as key.",
+});
 
 const WorkflowDependencyPatchSchema = z.object({
-  source_task_identifier: TaskIdentifierSchema,
-  destination_task_identifier: TaskIdentifierSchema,
-}).strict();
+  source: TaskIdentifierSchema.optional(),
+  destination: TaskIdentifierSchema.optional(),
+  source_task_identifier: TaskIdentifierSchema.optional(),
+  destination_task_identifier: TaskIdentifierSchema.optional(),
+}).strict().refine((dependency) => readDependencySource(dependency) !== undefined && readDependencyDestination(dependency) !== undefined, {
+  message: "dependency must include source/destination or source_task_identifier/destination_task_identifier.",
+});
 
 const DatamartCreateBigQueryOptionSchema = z.object({
   bigquery_connection_id: z.number().int().positive(),
@@ -128,8 +154,9 @@ export function createTroccoMcpServer() {
         const currentTasks = Array.isArray(current.tasks) ? current.tasks : [];
         const currentDependencies = Array.isArray(current.task_dependencies) ? current.task_dependencies : [];
         const nextTasks = mergeTasks(currentTasks, upsert_tasks ?? []);
-        const nextDependencies = mergeDependencies(currentDependencies, upsert_task_dependencies ?? []);
+        const nextDependencies = mergeDependencies(nextTasks, currentDependencies, upsert_task_dependencies ?? []);
         const updated = await client.updateWorkflowDefinition(pipeline_definition_id, {
+          ...buildWorkflowPatchBase(current),
           tasks: nextTasks,
           task_dependencies: nextDependencies,
         });
@@ -137,7 +164,7 @@ export function createTroccoMcpServer() {
         return jsonContent({
           ok: true,
           pipeline_definition_id: readNumber(updated.id) ?? pipeline_definition_id,
-          upserted_task_identifiers: (upsert_tasks ?? []).map((task) => normalizeIdentifier(task.task_identifier)),
+          upserted_task_keys: (upsert_tasks ?? []).map(readUpsertTaskKey).filter((key): key is string => key !== undefined),
           upserted_task_dependency_count: upsert_task_dependencies?.length ?? 0,
           change_reason,
           workflow: normalizeWorkflow(updated, pipeline_definition_id),
@@ -371,7 +398,7 @@ function normalizeWorkflow(workflow: TroccoWorkflow, requestedId: number) {
     slack_notify_tasks: tasks.filter(isRecord).filter((task) => task.type === "slack_notify").map(normalizeWorkflowTask),
     datamart_tasks: tasks.filter(isRecord).filter((task) => task.type === "trocco_bigquery_datamart").map((task) => ({
       task_identifier: readTaskIdentifier(task),
-      key: readString(task.key),
+      key: readTaskKey(task),
       identifier: readString(task.identifier),
       type: readString(task.type),
       definition_id: readNestedNumber(task, ["trocco_bigquery_datamart_config", "definition_id"]),
@@ -383,7 +410,7 @@ function normalizeWorkflow(workflow: TroccoWorkflow, requestedId: number) {
 function normalizeWorkflowTask(task: Record<string, unknown>) {
   return {
     task_identifier: readTaskIdentifier(task),
-    key: readString(task.key),
+    key: readTaskKey(task),
     identifier: readString(task.identifier),
     type: readString(task.type),
     type_config: readTaskTypeConfig(task),
@@ -405,8 +432,9 @@ function buildCheckResultReference(task: Record<string, unknown>) {
     return undefined;
   }
   return {
+    task_key: readTaskKey(task),
     task_identifier: readTaskIdentifier(task),
-    description: "Use this bigquery_data_check task identifier from a downstream if_else task condition to branch on the check_result.",
+    description: "Use this bigquery_data_check task key from a downstream if_else condition as task_key with variable=check_result.",
   };
 }
 
@@ -418,41 +446,185 @@ function readTaskTypeConfig(task: Record<string, unknown>) {
   return task[`${type}_config`];
 }
 
+function buildWorkflowPatchBase(current: TroccoWorkflow): Record<string, unknown> {
+  const base: Record<string, unknown> = {};
+  for (const field of [
+    "name",
+    "resource_group_id",
+    "description",
+    "max_task_parallelism",
+    "execution_timeout",
+    "max_retries",
+    "min_retry_interval",
+    "is_concurrent_execution_skipped",
+    "is_stopped_on_errors",
+    "labels",
+    "notifications",
+    "schedules",
+  ]) {
+    if (field in current) {
+      base[field] = current[field];
+    }
+  }
+  return base;
+}
+
 function mergeTasks(currentTasks: unknown[], upsertTasks: Array<z.infer<typeof WorkflowPatchTaskSchema>>) {
-  const nextTasks = [...currentTasks];
+  const nextTasks = currentTasks.filter(isRecord).map(normalizeTaskForWorkflowPatch);
+  const keyToIndex = new Map<string, number>();
+  for (const [index, task] of nextTasks.entries()) {
+    const key = readString(task.key);
+    if (key) {
+      keyToIndex.set(key, index);
+    }
+  }
+
+  let nextTaskIdentifier = maxTaskIdentifier(nextTasks) + 1;
   for (const task of upsertTasks) {
-    const taskIdentifier = normalizeIdentifier(task.task_identifier);
-    const taskPayload = { ...task, task_identifier: task.task_identifier };
-    const index = nextTasks.findIndex((currentTask) => isRecord(currentTask) && readTaskIdentifier(currentTask) === taskIdentifier);
-    if (index >= 0) {
-      nextTasks[index] = { ...(isRecord(nextTasks[index]) ? nextTasks[index] : {}), ...taskPayload };
+    const key = readUpsertTaskKey(task);
+    if (!key) {
+      throw new Error("upsert task must include key or task_identifier.");
+    }
+
+    const existingIndex = keyToIndex.get(key);
+    const existingTask = existingIndex === undefined ? undefined : nextTasks[existingIndex];
+    const assignedIdentifier = readNumber(existingTask?.task_identifier)
+      ?? readNumber(task.task_identifier)
+      ?? nextTaskIdentifier++;
+    const taskPayload = normalizeUpsertTaskForWorkflowPatch(task, key, assignedIdentifier);
+
+    if (existingIndex !== undefined) {
+      nextTasks[existingIndex] = {
+        ...existingTask,
+        ...taskPayload,
+      };
     } else {
+      keyToIndex.set(key, nextTasks.length);
       nextTasks.push(taskPayload);
     }
   }
   return nextTasks;
 }
 
-function mergeDependencies(currentDependencies: unknown[], upsertDependencies: Array<z.infer<typeof WorkflowDependencyPatchSchema>>) {
-  const nextDependencies = [...currentDependencies];
+function normalizeTaskForWorkflowPatch(task: Record<string, unknown>): Record<string, unknown> {
+  const payload = { ...task };
+  const key = readTaskKey(task);
+  if (!key) {
+    throw new Error("existing workflow task is missing both key and task_identifier.");
+  }
+  payload.key = key;
+  delete payload.identifier;
+
+  const taskIdentifier = readNumber(task.task_identifier) ?? readNumericString(task.task_identifier);
+  if (taskIdentifier === undefined) {
+    delete payload.task_identifier;
+  } else {
+    payload.task_identifier = taskIdentifier;
+  }
+  return normalizeTaskConfigForWorkflowPatch(payload);
+}
+
+function normalizeUpsertTaskForWorkflowPatch(
+  task: z.infer<typeof WorkflowPatchTaskSchema>,
+  key: string,
+  taskIdentifier: number,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = { ...task, key, task_identifier: taskIdentifier };
+  delete payload.identifier;
+  return normalizeTaskConfigForWorkflowPatch(payload);
+}
+
+function normalizeTaskConfigForWorkflowPatch(task: Record<string, unknown>): Record<string, unknown> {
+  if (task.type === "if_else" && isRecord(task.if_else_config)) {
+    const ifElseConfig = { ...task.if_else_config };
+    delete ifElseConfig.condition;
+    task.if_else_config = ifElseConfig;
+  }
+  return task;
+}
+
+function maxTaskIdentifier(tasks: Array<Record<string, unknown>>): number {
+  return tasks.reduce((max, task) => {
+    const identifier = readNumber(task.task_identifier) ?? readNumericString(task.task_identifier);
+    return identifier === undefined ? max : Math.max(max, identifier);
+  }, 0);
+}
+
+function mergeDependencies(
+  nextTasks: Array<Record<string, unknown>>,
+  currentDependencies: unknown[],
+  upsertDependencies: Array<z.infer<typeof WorkflowDependencyPatchSchema>>,
+) {
+  const taskKeyByIdentifier = buildTaskKeyByIdentifier(nextTasks);
+  const nextDependencies = currentDependencies
+    .filter(isRecord)
+    .map((dependency) => normalizeDependencyForWorkflowPatch(dependency, taskKeyByIdentifier));
+  const dependencyKeys = new Set(nextDependencies.map((dependency) => `${dependency.source}\u0000${dependency.destination}`));
+
   for (const dependency of upsertDependencies) {
-    const source = normalizeIdentifier(dependency.source_task_identifier);
-    const destination = normalizeIdentifier(dependency.destination_task_identifier);
-    const dependencyPayload = { source, destination };
-    const index = nextDependencies.findIndex((currentDependency) => {
-      if (!isRecord(currentDependency)) {
-        return false;
-      }
-      const current = normalizeWorkflowDependency(currentDependency);
-      return normalizeIdentifier(current.source_task_identifier) === source && normalizeIdentifier(current.destination_task_identifier) === destination;
-    });
-    if (index >= 0) {
-      nextDependencies[index] = { ...(isRecord(nextDependencies[index]) ? nextDependencies[index] : {}), ...dependencyPayload };
-    } else {
-      nextDependencies.push(dependencyPayload);
+    const source = resolveTaskReference(readDependencySource(dependency), taskKeyByIdentifier);
+    const destination = resolveTaskReference(readDependencyDestination(dependency), taskKeyByIdentifier);
+    if (!source || !destination) {
+      throw new Error("dependency must include resolvable source and destination task keys.");
+    }
+
+    const dependencyKey = `${source}\u0000${destination}`;
+    if (!dependencyKeys.has(dependencyKey)) {
+      nextDependencies.push({ source, destination });
+      dependencyKeys.add(dependencyKey);
     }
   }
   return nextDependencies;
+}
+
+function buildTaskKeyByIdentifier(tasks: Array<Record<string, unknown>>): Map<string, string> {
+  const taskKeyByIdentifier = new Map<string, string>();
+  for (const task of tasks) {
+    const key = readString(task.key);
+    const identifier = normalizeIdentifier(task.task_identifier);
+    if (key && identifier) {
+      taskKeyByIdentifier.set(identifier, key);
+    }
+  }
+  return taskKeyByIdentifier;
+}
+
+function normalizeDependencyForWorkflowPatch(
+  dependency: Record<string, unknown>,
+  taskKeyByIdentifier: Map<string, string>,
+): { source: string; destination: string } {
+  const source = resolveTaskReference(
+    readStringOrNumber(dependency.source) ?? readStringOrNumber(dependency.source_task_identifier),
+    taskKeyByIdentifier,
+  );
+  const destination = resolveTaskReference(
+    readStringOrNumber(dependency.destination) ?? readStringOrNumber(dependency.destination_task_identifier),
+    taskKeyByIdentifier,
+  );
+  if (!source || !destination) {
+    throw new Error("existing workflow dependency includes an unresolvable source or destination.");
+  }
+  return { source, destination };
+}
+
+function readUpsertTaskKey(task: { key?: string; task_identifier?: string | number }): string | undefined {
+  return readString(task.key) ?? normalizeIdentifier(task.task_identifier);
+}
+
+function readDependencySource(dependency: { source?: string | number; source_task_identifier?: string | number }): string | number | undefined {
+  return readStringOrNumber(dependency.source) ?? readStringOrNumber(dependency.source_task_identifier);
+}
+
+function readDependencyDestination(dependency: { destination?: string | number; destination_task_identifier?: string | number }): string | number | undefined {
+  return readStringOrNumber(dependency.destination) ?? readStringOrNumber(dependency.destination_task_identifier);
+}
+
+function resolveTaskReference(reference: unknown, taskKeyByIdentifier: Map<string, string>): string | undefined {
+  const normalized = normalizeIdentifier(reference);
+  if (!normalized) {
+    return undefined;
+  }
+  return taskKeyByIdentifier.get(normalized) ?? normalized;
 }
 
 function normalizeDatamart(datamart: TroccoDatamartDefinition, requestedId: number) {
@@ -551,6 +723,13 @@ function readNumber(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
 }
 
+function readNumericString(value: unknown): number | undefined {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) {
+    return undefined;
+  }
+  return Number(value);
+}
+
 function readStringOrNumber(value: unknown): string | number | undefined {
   return typeof value === "string" || typeof value === "number" ? value : undefined;
 }
@@ -562,6 +741,10 @@ function readStringArray(value: unknown): string[] | undefined {
 function readTaskIdentifier(task: Record<string, unknown>): string | undefined {
   const identifier = readStringOrNumber(task.task_identifier) ?? readStringOrNumber(task.key) ?? readStringOrNumber(task.identifier);
   return normalizeIdentifier(identifier);
+}
+
+function readTaskKey(task: Record<string, unknown>): string | undefined {
+  return readString(task.key) ?? normalizeIdentifier(task.task_identifier) ?? readString(task.identifier);
 }
 
 function normalizeIdentifier(identifier: unknown): string | undefined {

@@ -100,7 +100,8 @@ export type UpdateDatamartDefinitionRequest = {
   datamart_bigquery_option: Record<string, unknown>;
 };
 
-export type UpdateWorkflowDefinitionRequest = {
+export type UpdateWorkflowDefinitionRequest = Record<string, unknown> & {
+  name?: string;
   tasks?: unknown[];
   task_dependencies?: unknown[];
 };
