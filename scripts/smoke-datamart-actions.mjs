@@ -21,6 +21,7 @@ const expectedTools = [
   "run_datamart_job",
   "create_datamart_definition",
   "update_datamart_definition",
+  "patch_workflow_tasks",
 ];
 
 const client = new Client({
@@ -45,7 +46,7 @@ try {
 
   console.log(JSON.stringify({
     ok: missingTools.length === 0,
-    check: "datamartActionToolsListed",
+    check: "datamartAndWorkflowActionToolsListed",
     expected_tools: expectedTools,
     missing_tools: missingTools,
   }, null, 2));
