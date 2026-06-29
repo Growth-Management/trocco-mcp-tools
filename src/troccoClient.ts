@@ -61,6 +61,8 @@ export type TroccoWorkflow = Record<string, unknown> & {
   name?: string;
   tasks?: unknown[];
   task_dependencies?: unknown[];
+  notifications?: unknown[];
+  schedules?: unknown[];
 };
 
 export type TroccoDatamartDefinition = Record<string, unknown> & {
@@ -98,6 +100,11 @@ export type UpdateDatamartDefinitionRequest = {
   datamart_bigquery_option: Record<string, unknown>;
 };
 
+export type UpdateWorkflowDefinitionRequest = {
+  tasks?: unknown[];
+  task_dependencies?: unknown[];
+};
+
 const DEFAULT_BASE_URL = "https://trocco.io";
 
 export class TroccoClient {
@@ -119,6 +126,13 @@ export class TroccoClient {
 
   async getWorkflow(pipelineDefinitionId: number): Promise<TroccoWorkflow> {
     return this.get<TroccoWorkflow>(`/api/pipeline_definitions/${pipelineDefinitionId}`);
+  }
+
+  async updateWorkflowDefinition(
+    pipelineDefinitionId: number,
+    request: UpdateWorkflowDefinitionRequest,
+  ): Promise<TroccoWorkflow> {
+    return this.patch<TroccoWorkflow>(`/api/pipeline_definitions/${pipelineDefinitionId}`, request);
   }
 
   async getDatamart(datamartDefinitionId: number): Promise<TroccoDatamartDefinition> {
