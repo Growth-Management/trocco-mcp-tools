@@ -13,14 +13,15 @@ const IfElseConfigSchema = z.object({
     set_type: z.enum(["and", "or"]),
     conditions: z.array(z.object({
       task_key: z.string().min(1).nullable().optional(),
+      identifier: z.string().min(1).nullable().optional(),
       variable: z.string().min(1),
       operator: z.string().min(1),
       value: z.string(),
     }).passthrough()).min(1),
   }).passthrough(),
   destinations: z.object({
-    if: z.array(z.string()),
-    else: z.array(z.string()),
+    if: z.array(z.string().nullable()).optional(),
+    else: z.array(z.string().nullable()).optional(),
   }).passthrough(),
 }).passthrough();
 const SlackNotifyConfigSchema = z.object({
@@ -434,7 +435,7 @@ function buildCheckResultReference(task: Record<string, unknown>) {
   return {
     task_key: readTaskKey(task),
     task_identifier: readTaskIdentifier(task),
-    description: "Use this bigquery_data_check task key from a downstream if_else condition as task_key with variable=check_result.",
+    description: "Use this bigquery_data_check task key from a downstream if_else task condition to branch on check_result.",
   };
 }
 
@@ -503,7 +504,8 @@ function mergeTasks(currentTasks: unknown[], upsertTasks: Array<z.infer<typeof W
       nextTasks.push(taskPayload);
     }
   }
-  return nextTasks;
+
+  return nextTasks.map(normalizeTaskConfigForWorkflowPatch);
 }
 
 function normalizeTaskForWorkflowPatch(task: Record<string, unknown>): Record<string, unknown> {
@@ -521,7 +523,7 @@ function normalizeTaskForWorkflowPatch(task: Record<string, unknown>): Record<st
   } else {
     payload.task_identifier = taskIdentifier;
   }
-  return normalizeTaskConfigForWorkflowPatch(payload);
+  return payload;
 }
 
 function normalizeUpsertTaskForWorkflowPatch(
@@ -531,14 +533,12 @@ function normalizeUpsertTaskForWorkflowPatch(
 ): Record<string, unknown> {
   const payload: Record<string, unknown> = { ...task, key, task_identifier: taskIdentifier };
   delete payload.identifier;
-  return normalizeTaskConfigForWorkflowPatch(payload);
+  return payload;
 }
 
 function normalizeTaskConfigForWorkflowPatch(task: Record<string, unknown>): Record<string, unknown> {
   if (task.type === "if_else" && isRecord(task.if_else_config)) {
-    const ifElseConfig = { ...task.if_else_config };
-    delete ifElseConfig.condition;
-    task.if_else_config = ifElseConfig;
+    task.if_else_config = normalizeIfElseConfigForWorkflowPatch(task.if_else_config);
   }
   if (task.type === "slack_notify") {
     const slackConfig = isRecord(task.slack_notification_config)
@@ -550,6 +550,68 @@ function normalizeTaskConfigForWorkflowPatch(task: Record<string, unknown>): Rec
     }
   }
   return task;
+}
+
+function normalizeIfElseConfigForWorkflowPatch(config: Record<string, unknown>): Record<string, unknown> {
+  const nextConfig = { ...config };
+  delete nextConfig.condition;
+
+  if (isRecord(nextConfig.condition_groups)) {
+    const conditionGroups = { ...nextConfig.condition_groups };
+    if (Array.isArray(conditionGroups.conditions)) {
+      conditionGroups.conditions = conditionGroups.conditions
+        .filter(isRecord)
+        .map(normalizeIfElseConditionForWorkflowPatch);
+    }
+    nextConfig.condition_groups = conditionGroups;
+  }
+
+  if (isRecord(nextConfig.destinations)) {
+    const destinations = nextConfig.destinations;
+    const normalizedDestinations: Record<string, string[]> = {};
+    const ifDestinations = normalizeIfElseDestinationArray(destinations.if);
+    const elseDestinations = normalizeIfElseDestinationArray(destinations.else);
+    if (ifDestinations.length > 0) {
+      normalizedDestinations.if = ifDestinations;
+    }
+    if (elseDestinations.length > 0) {
+      normalizedDestinations.else = elseDestinations;
+    }
+    nextConfig.destinations = normalizedDestinations;
+  }
+
+  return nextConfig;
+}
+
+function normalizeIfElseConditionForWorkflowPatch(condition: Record<string, unknown>): Record<string, unknown> {
+  const nextCondition = { ...condition };
+  const taskKey = normalizeNonEmptyReference(condition.task_key);
+  const identifier = normalizeNonEmptyReference(condition.identifier);
+
+  delete nextCondition.task_key;
+  delete nextCondition.identifier;
+
+  if (taskKey) {
+    nextCondition.task_key = taskKey;
+  } else if (identifier) {
+    nextCondition.identifier = identifier;
+  }
+  return nextCondition;
+}
+
+function normalizeIfElseDestinationArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map(normalizeNonEmptyReference).filter((destination): destination is string => destination !== undefined);
+}
+
+function normalizeNonEmptyReference(value: unknown): string | undefined {
+  const normalized = normalizeIdentifier(value);
+  if (!normalized || normalized.trim() === "") {
+    return undefined;
+  }
+  return normalized;
 }
 
 function maxTaskIdentifier(tasks: Array<Record<string, unknown>>): number {
