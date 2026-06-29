@@ -5,7 +5,7 @@ import { analyzeSql } from "./sqlAnalysis.js";
 import { TroccoClient, TroccoClientError, type TroccoDatamartDefinition, type TroccoWorkflow } from "./troccoClient.js";
 
 const TaskIdentifierSchema = z.union([z.string().min(1), z.number().int().nonnegative()]);
-const LooseConfigSchema = z.record(z.unknown());
+const LooseConfigSchema = z.object({}).passthrough();
 
 const BigQueryDataCheckTaskSchema = z.object({
   task_identifier: TaskIdentifierSchema,
