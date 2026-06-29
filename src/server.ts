@@ -443,7 +443,7 @@ function readTaskTypeConfig(task: Record<string, unknown>) {
   if (!type) {
     return undefined;
   }
-  return task[`${type}_config`];
+  return task[`${type}_config`] ?? (type === "slack_notify" ? task.slack_notification_config : undefined);
 }
 
 function buildWorkflowPatchBase(current: TroccoWorkflow): Record<string, unknown> {
@@ -539,6 +539,15 @@ function normalizeTaskConfigForWorkflowPatch(task: Record<string, unknown>): Rec
     const ifElseConfig = { ...task.if_else_config };
     delete ifElseConfig.condition;
     task.if_else_config = ifElseConfig;
+  }
+  if (task.type === "slack_notify") {
+    const slackConfig = isRecord(task.slack_notification_config)
+      ? task.slack_notification_config
+      : task.slack_notify_config;
+    delete task.slack_notify_config;
+    if (slackConfig !== undefined) {
+      task.slack_notification_config = slackConfig;
+    }
   }
   return task;
 }
