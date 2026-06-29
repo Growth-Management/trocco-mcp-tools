@@ -4,80 +4,138 @@ import { attachDownstreamReferences, buildDatamartAuditFields } from "./auditMod
 import { analyzeSql } from "./sqlAnalysis.js";
 import { TroccoClient, TroccoClientError, type TroccoDatamartDefinition, type TroccoWorkflow } from "./troccoClient.js";
 
-const DatamartCreateBigQueryOptionSchema = z
-  .object({
-    bigquery_connection_id: z.number().int().positive(),
-    query: z.string().min(1),
-    query_mode: z.enum(["insert"]).optional(),
-    destination_dataset: z.string().min(1),
-    destination_table: z.string().min(1),
-    write_disposition: z.enum(["append", "truncate", "incremental", "scd_type_2"]),
-    schema_evolution_mode: z.enum(["detect_only", "auto_add_column"]).optional(),
-    incremental_column: z.string().nullable().optional(),
-    merge_keys: z.array(z.string()).min(1).optional(),
-    on_matched_action: z.enum(["upsert", "skip"]).nullable().optional(),
-    lookback_period_column: z.string().nullable().optional(),
-    lookback_period_column_type: z.enum(["TIMESTAMP", "DATETIME", "DATE"]).nullable().optional(),
-    lookback_period_timezone: z.string().nullable().optional(),
-    lookback_period_from: z.number().int().nullable().optional(),
-    lookback_period_to: z.number().int().nullable().optional(),
-    lookback_period_unit: z.enum(["days", "hours"]).nullable().optional(),
-    before_load: z.string().nullable().optional(),
-    partitioning: z.enum(["ingestion_time", "time_unit_column"]).nullable().optional(),
-    partitioning_time: z.enum(["DAY", "HOUR", "MONTH", "YEAR"]).nullable().optional(),
-    partitioning_field: z.string().nullable().optional(),
-    clustering_fields: z.array(z.string()).max(4).optional(),
-  })
-  .strict();
+const TaskIdentifierSchema = z.union([z.string().min(1), z.number().int().nonnegative()]);
+const LooseConfigSchema = z.record(z.unknown());
 
-const DatamartUpdatePatchSchema = z
-  .object({
-    query: z.string().optional(),
-    query_mode: z.enum(["insert"]).optional(),
-    destination_dataset: z.string().optional(),
-    destination_table: z.string().optional(),
-    write_disposition: z.enum(["append", "truncate", "incremental", "scd_type_2"]).optional(),
-    schema_evolution_mode: z.enum(["detect_only", "auto_add_column"]).optional(),
-    incremental_column: z.string().nullable().optional(),
-    merge_keys: z.array(z.string()).min(1).optional(),
-    on_matched_action: z.enum(["upsert", "skip"]).nullable().optional(),
-    lookback_period_column: z.string().nullable().optional(),
-    lookback_period_column_type: z.enum(["TIMESTAMP", "DATETIME", "DATE"]).nullable().optional(),
-    lookback_period_timezone: z.string().nullable().optional(),
-    lookback_period_from: z.number().int().nullable().optional(),
-    lookback_period_to: z.number().int().nullable().optional(),
-    lookback_period_unit: z.enum(["days", "hours"]).nullable().optional(),
-    before_load: z.string().nullable().optional(),
-    partitioning: z.enum(["ingestion_time", "time_unit_column"]).nullable().optional(),
-    partitioning_time: z.enum(["DAY", "HOUR", "MONTH", "YEAR"]).nullable().optional(),
-    partitioning_field: z.string().nullable().optional(),
-    clustering_fields: z.array(z.string()).max(4).optional(),
-  })
-  .strict()
-  .refine((patch) => Object.keys(patch).length > 0, {
-    message: "patch must include at least one allowed field.",
-  });
+const BigQueryDataCheckTaskSchema = z.object({
+  task_identifier: TaskIdentifierSchema,
+  type: z.literal("bigquery_data_check"),
+  bigquery_data_check_config: z.object({
+    connection_id: z.number().int().positive(),
+    name: z.string().min(1),
+    query: z.string().min(1),
+    operator: z.string().min(1),
+    query_result: z.union([z.string(), z.number(), z.boolean()]),
+    accepts_null: z.boolean().optional(),
+    custom_variables: z.array(LooseConfigSchema).optional(),
+  }).passthrough(),
+}).passthrough();
+
+const IfElseTaskSchema = z.object({
+  task_identifier: TaskIdentifierSchema,
+  type: z.literal("if_else"),
+  if_else_config: LooseConfigSchema,
+}).passthrough();
+
+const SlackNotifyTaskSchema = z.object({
+  task_identifier: TaskIdentifierSchema,
+  type: z.literal("slack_notify"),
+  slack_notify_config: LooseConfigSchema,
+}).passthrough();
+
+const WorkflowPatchTaskSchema = z.discriminatedUnion("type", [
+  BigQueryDataCheckTaskSchema,
+  IfElseTaskSchema,
+  SlackNotifyTaskSchema,
+]);
+
+const WorkflowDependencyPatchSchema = z.object({
+  source_task_identifier: TaskIdentifierSchema,
+  destination_task_identifier: TaskIdentifierSchema,
+}).strict();
+
+const DatamartCreateBigQueryOptionSchema = z.object({
+  bigquery_connection_id: z.number().int().positive(),
+  query: z.string().min(1),
+  query_mode: z.enum(["insert"]).optional(),
+  destination_dataset: z.string().min(1),
+  destination_table: z.string().min(1),
+  write_disposition: z.enum(["append", "truncate", "incremental", "scd_type_2"]),
+  schema_evolution_mode: z.enum(["detect_only", "auto_add_column"]).optional(),
+  incremental_column: z.string().nullable().optional(),
+  merge_keys: z.array(z.string()).min(1).optional(),
+  on_matched_action: z.enum(["upsert", "skip"]).nullable().optional(),
+  lookback_period_column: z.string().nullable().optional(),
+  lookback_period_column_type: z.enum(["TIMESTAMP", "DATETIME", "DATE"]).nullable().optional(),
+  lookback_period_timezone: z.string().nullable().optional(),
+  lookback_period_from: z.number().int().nullable().optional(),
+  lookback_period_to: z.number().int().nullable().optional(),
+  lookback_period_unit: z.enum(["days", "hours"]).nullable().optional(),
+  before_load: z.string().nullable().optional(),
+  partitioning: z.enum(["ingestion_time", "time_unit_column"]).nullable().optional(),
+  partitioning_time: z.enum(["DAY", "HOUR", "MONTH", "YEAR"]).nullable().optional(),
+  partitioning_field: z.string().nullable().optional(),
+  clustering_fields: z.array(z.string()).max(4).optional(),
+}).strict();
+
+const DatamartUpdatePatchSchema = DatamartCreateBigQueryOptionSchema.partial().strict().refine(
+  (patch) => Object.keys(patch).length > 0,
+  { message: "patch must include at least one allowed field." },
+);
 
 export function createTroccoMcpServer() {
-  const server = new McpServer({
-    name: "trocco-mcp-tools",
-    version: "0.1.0",
-  });
+  const server = new McpServer({ name: "trocco-mcp-tools", version: "0.1.0" });
 
   server.tool(
     "get_workflow",
     "Fetch a TROCCO workflow definition by pipeline_definition_id for read-only audit preparation.",
-    {
-      pipeline_definition_id: z.number().int().positive(),
-    },
+    { pipeline_definition_id: z.number().int().positive() },
     async ({ pipeline_definition_id }) => {
       try {
         const client = new TroccoClient();
         const workflow = await client.getWorkflow(pipeline_definition_id);
+        return jsonContent({ ok: true, ...normalizeWorkflow(workflow, pipeline_definition_id), raw: workflow });
+      } catch (error) {
+        return jsonContent(toErrorPayload(error));
+      }
+    },
+  );
+
+  server.tool(
+    "patch_workflow_tasks",
+    "Add or update post-run audit tasks and task_dependencies on a TROCCO workflow definition. Requires confirm: true.",
+    {
+      pipeline_definition_id: z.number().int().positive(),
+      upsert_tasks: z.array(WorkflowPatchTaskSchema).min(1).optional(),
+      upsert_task_dependencies: z.array(WorkflowDependencyPatchSchema).optional(),
+      expected_current: z.record(z.unknown()).optional(),
+      confirm: z.literal(true),
+      change_reason: z.string().min(1),
+    },
+    async ({ pipeline_definition_id, upsert_tasks, upsert_task_dependencies, expected_current, change_reason }) => {
+      try {
+        const client = new TroccoClient();
+        const current = await client.getWorkflow(pipeline_definition_id);
+        const mismatches = buildWorkflowExpectedCurrentMismatches(current, expected_current);
+        if (mismatches.length > 0) {
+          return jsonContent({
+            ok: false,
+            pipeline_definition_id,
+            error: {
+              code: "precondition_failed",
+              message: "Current workflow definition did not match expected_current values. Update was not sent.",
+              detail: { mismatches },
+            },
+          });
+        }
+
+        const currentTasks = Array.isArray(current.tasks) ? current.tasks : [];
+        const currentDependencies = Array.isArray(current.task_dependencies) ? current.task_dependencies : [];
+        const nextTasks = mergeTasks(currentTasks, upsert_tasks ?? []);
+        const nextDependencies = mergeDependencies(currentDependencies, upsert_task_dependencies ?? []);
+        const updated = await client.updateWorkflowDefinition(pipeline_definition_id, {
+          tasks: nextTasks,
+          task_dependencies: nextDependencies,
+        });
+
         return jsonContent({
           ok: true,
-          ...normalizeWorkflow(workflow, pipeline_definition_id),
-          raw: workflow,
+          pipeline_definition_id: readNumber(updated.id) ?? pipeline_definition_id,
+          upserted_task_identifiers: (upsert_tasks ?? []).map((task) => normalizeIdentifier(task.task_identifier)),
+          upserted_task_dependency_count: upsert_task_dependencies?.length ?? 0,
+          change_reason,
+          workflow: normalizeWorkflow(updated, pipeline_definition_id),
+          raw: updated,
         });
       } catch (error) {
         return jsonContent(toErrorPayload(error));
@@ -88,18 +146,12 @@ export function createTroccoMcpServer() {
   server.tool(
     "get_datamart",
     "Fetch a TROCCO datamart definition by datamart_definition_id, including BigQuery SQL and option metadata when available.",
-    {
-      datamart_definition_id: z.number().int().positive(),
-    },
+    { datamart_definition_id: z.number().int().positive() },
     async ({ datamart_definition_id }) => {
       try {
         const client = new TroccoClient();
         const datamart = await client.getDatamart(datamart_definition_id);
-        return jsonContent({
-          ok: true,
-          ...normalizeDatamart(datamart, datamart_definition_id),
-          raw: datamart,
-        });
+        return jsonContent({ ok: true, ...normalizeDatamart(datamart, datamart_definition_id), raw: datamart });
       } catch (error) {
         return jsonContent(toErrorPayload(error));
       }
@@ -109,25 +161,20 @@ export function createTroccoMcpServer() {
   server.tool(
     "get_datamart_job_status",
     "Return an explicit unsupported response until a TROCCO datamart job status endpoint is confirmed.",
-    {
-      datamart_job_id: z.number().int().positive(),
-      datamart_definition_id: z.number().int().positive().optional(),
-    },
-    async ({ datamart_job_id, datamart_definition_id }) =>
-      jsonContent({
-        ok: false,
-        datamart_job_id,
-        datamart_definition_id,
-        error: {
-          code: "unsupported_operation",
-          message:
-            "TROCCO API docs confirm POST /api/datamart_jobs, but a datamart job status GET endpoint has not been confirmed.",
-          detail: {
-            confirmed_datamart_job_endpoint: "POST /api/datamart_jobs",
-            unconfirmed_status_endpoint: "GET /api/datamart_jobs/{datamart_job_id}",
-          },
+    { datamart_job_id: z.number().int().positive(), datamart_definition_id: z.number().int().positive().optional() },
+    async ({ datamart_job_id, datamart_definition_id }) => jsonContent({
+      ok: false,
+      datamart_job_id,
+      datamart_definition_id,
+      error: {
+        code: "unsupported_operation",
+        message: "TROCCO API docs confirm POST /api/datamart_jobs, but a datamart job status GET endpoint has not been confirmed.",
+        detail: {
+          confirmed_datamart_job_endpoint: "POST /api/datamart_jobs",
+          unconfirmed_status_endpoint: "GET /api/datamart_jobs/{datamart_job_id}",
         },
-      }),
+      },
+    }),
   );
 
   server.tool(
@@ -140,16 +187,7 @@ export function createTroccoMcpServer() {
       context_time: z.string().optional(),
       time_zone: z.string().optional(),
       memo: z.string().optional(),
-      custom_variables: z
-        .array(
-          z
-            .object({
-              name: z.string().min(1),
-              value: z.string(),
-            })
-            .strict(),
-        )
-        .optional(),
+      custom_variables: z.array(z.object({ name: z.string().min(1), value: z.string() }).strict()).optional(),
     },
     async ({ datamart_definition_id, run_reason, context_time, time_zone, memo, custom_variables }) => {
       try {
@@ -161,7 +199,6 @@ export function createTroccoMcpServer() {
           memo: memo ?? run_reason,
           custom_variables,
         });
-
         return jsonContent({
           ok: true,
           datamart_definition_id: readNumber(job.datamart_definition_id) ?? datamart_definition_id,
@@ -193,12 +230,8 @@ export function createTroccoMcpServer() {
           name,
           description,
           data_warehouse_type: data_warehouse_type ?? "bigquery",
-          datamart_bigquery_option: {
-            query_mode: "insert",
-            ...datamart_bigquery_option,
-          },
+          datamart_bigquery_option: { query_mode: "insert", ...datamart_bigquery_option },
         });
-
         return jsonContent({
           ok: true,
           datamart_definition_id: readNumber(created.id),
@@ -229,7 +262,6 @@ export function createTroccoMcpServer() {
         const client = new TroccoClient();
         const current = await client.getDatamart(datamart_definition_id);
         const mismatches = buildExpectedCurrentMismatches(current, expected_current);
-
         if (mismatches.length > 0) {
           return jsonContent({
             ok: false,
@@ -237,17 +269,11 @@ export function createTroccoMcpServer() {
             error: {
               code: "precondition_failed",
               message: "Current datamart definition did not match expected_current values. Update was not sent.",
-              detail: {
-                mismatches,
-              },
+              detail: { mismatches },
             },
           });
         }
-
-        const updated = await client.updateDatamartDefinition(datamart_definition_id, {
-          datamart_bigquery_option: patch,
-        });
-
+        const updated = await client.updateDatamartDefinition(datamart_definition_id, { datamart_bigquery_option: patch });
         return jsonContent({
           ok: true,
           datamart_definition_id: readNumber(updated.id) ?? datamart_definition_id,
@@ -264,9 +290,7 @@ export function createTroccoMcpServer() {
   server.tool(
     "build_workflow_audit_payload",
     "Fetch a TROCCO workflow and its BigQuery datamart definitions, returning a single read-only audit payload.",
-    {
-      pipeline_definition_id: z.number().int().positive(),
-    },
+    { pipeline_definition_id: z.number().int().positive() },
     async ({ pipeline_definition_id }) => {
       try {
         const client = new TroccoClient();
@@ -274,7 +298,6 @@ export function createTroccoMcpServer() {
         const normalizedWorkflow = normalizeWorkflow(workflow, pipeline_definition_id);
         const datamarts = [];
         const datamart_errors = [];
-
         for (const datamartTask of normalizedWorkflow.datamart_tasks) {
           if (!datamartTask.definition_id) {
             datamart_errors.push({
@@ -286,7 +309,6 @@ export function createTroccoMcpServer() {
             });
             continue;
           }
-
           try {
             const datamart = await client.getDatamart(datamartTask.definition_id);
             datamarts.push({
@@ -305,7 +327,6 @@ export function createTroccoMcpServer() {
             });
           }
         }
-
         return jsonContent({
           ok: datamart_errors.length === 0,
           pipeline_definition_id: normalizedWorkflow.pipeline_definition_id,
@@ -313,9 +334,7 @@ export function createTroccoMcpServer() {
           workflow: normalizedWorkflow,
           datamarts: attachDownstreamReferences(datamarts),
           datamart_errors,
-          raw: {
-            workflow,
-          },
+          raw: { workflow },
         });
       } catch (error) {
         return jsonContent(toErrorPayload(error));
@@ -329,29 +348,105 @@ export function createTroccoMcpServer() {
 function normalizeWorkflow(workflow: TroccoWorkflow, requestedId: number) {
   const tasks = Array.isArray(workflow.tasks) ? workflow.tasks : [];
   const taskDependencies = Array.isArray(workflow.task_dependencies) ? workflow.task_dependencies : [];
+  const notifications = Array.isArray(workflow.notifications) ? workflow.notifications : [];
+  const schedules = Array.isArray(workflow.schedules) ? workflow.schedules : [];
 
   return {
     pipeline_definition_id: readNumber(workflow.id) ?? requestedId,
     name: readString(workflow.name),
     tasks,
     task_dependencies: taskDependencies,
-    normalized_task_dependencies: taskDependencies.filter(isRecord).map((dependency) => ({
-      source_task_identifier: readString(dependency.source),
-      destination_task_identifier: readString(dependency.destination),
-      raw: dependency,
+    notifications,
+    schedules,
+    normalized_tasks: tasks.filter(isRecord).map(normalizeWorkflowTask),
+    normalized_task_dependencies: taskDependencies.filter(isRecord).map(normalizeWorkflowDependency),
+    bigquery_data_check_tasks: tasks.filter(isRecord).filter((task) => task.type === "bigquery_data_check").map(normalizeWorkflowTask),
+    if_else_tasks: tasks.filter(isRecord).filter((task) => task.type === "if_else").map(normalizeWorkflowTask),
+    slack_notify_tasks: tasks.filter(isRecord).filter((task) => task.type === "slack_notify").map(normalizeWorkflowTask),
+    datamart_tasks: tasks.filter(isRecord).filter((task) => task.type === "trocco_bigquery_datamart").map((task) => ({
+      task_identifier: readTaskIdentifier(task),
+      key: readString(task.key),
+      identifier: readString(task.identifier),
+      type: readString(task.type),
+      definition_id: readNestedNumber(task, ["trocco_bigquery_datamart_config", "definition_id"]),
+      raw: task,
     })),
-    datamart_tasks: tasks
-      .filter(isRecord)
-      .filter((task) => task.type === "trocco_bigquery_datamart")
-      .map((task) => ({
-        task_identifier: readString(task.key) ?? readString(task.identifier),
-        key: readString(task.key),
-        identifier: readString(task.identifier),
-        type: readString(task.type),
-        definition_id: readNestedNumber(task, ["trocco_bigquery_datamart_config", "definition_id"]),
-        raw: task,
-      })),
   };
+}
+
+function normalizeWorkflowTask(task: Record<string, unknown>) {
+  return {
+    task_identifier: readTaskIdentifier(task),
+    key: readString(task.key),
+    identifier: readString(task.identifier),
+    type: readString(task.type),
+    type_config: readTaskTypeConfig(task),
+    check_result_reference: buildCheckResultReference(task),
+    raw: task,
+  };
+}
+
+function normalizeWorkflowDependency(dependency: Record<string, unknown>) {
+  return {
+    source_task_identifier: readStringOrNumber(dependency.source_task_identifier) ?? readStringOrNumber(dependency.source),
+    destination_task_identifier: readStringOrNumber(dependency.destination_task_identifier) ?? readStringOrNumber(dependency.destination),
+    raw: dependency,
+  };
+}
+
+function buildCheckResultReference(task: Record<string, unknown>) {
+  if (task.type !== "bigquery_data_check") {
+    return undefined;
+  }
+  return {
+    task_identifier: readTaskIdentifier(task),
+    description: "Use this bigquery_data_check task identifier from a downstream if_else task condition to branch on the check_result.",
+  };
+}
+
+function readTaskTypeConfig(task: Record<string, unknown>) {
+  const type = readString(task.type);
+  if (!type) {
+    return undefined;
+  }
+  return task[`${type}_config`];
+}
+
+function mergeTasks(currentTasks: unknown[], upsertTasks: Array<z.infer<typeof WorkflowPatchTaskSchema>>) {
+  const nextTasks = [...currentTasks];
+  for (const task of upsertTasks) {
+    const taskIdentifier = normalizeIdentifier(task.task_identifier);
+    const taskPayload = { ...task, task_identifier: task.task_identifier };
+    const index = nextTasks.findIndex((currentTask) => isRecord(currentTask) && readTaskIdentifier(currentTask) === taskIdentifier);
+    if (index >= 0) {
+      nextTasks[index] = { ...(isRecord(nextTasks[index]) ? nextTasks[index] : {}), ...taskPayload };
+    } else {
+      nextTasks.push(taskPayload);
+    }
+  }
+  return nextTasks;
+}
+
+function mergeDependencies(currentDependencies: unknown[], upsertDependencies: Array<z.infer<typeof WorkflowDependencyPatchSchema>>) {
+  const nextDependencies = [...currentDependencies];
+  for (const dependency of upsertDependencies) {
+    const source = normalizeIdentifier(dependency.source_task_identifier);
+    const destination = normalizeIdentifier(dependency.destination_task_identifier);
+    const dependencyPayload = { source, destination };
+    const index = nextDependencies.findIndex((currentDependency) => {
+      if (!isRecord(currentDependency)) {
+        return false;
+      }
+      const current = normalizeWorkflowDependency(currentDependency);
+      return normalizeIdentifier(current.source_task_identifier) === source && normalizeIdentifier(current.destination_task_identifier) === destination;
+    });
+    if (index >= 0) {
+      nextDependencies[index] = { ...(isRecord(nextDependencies[index]) ? nextDependencies[index] : {}), ...dependencyPayload };
+    } else {
+      nextDependencies.push(dependencyPayload);
+    }
+  }
+  return nextDependencies;
 }
 
 function normalizeDatamart(datamart: TroccoDatamartDefinition, requestedId: number) {
@@ -373,12 +468,7 @@ function normalizeDatamart(datamart: TroccoDatamartDefinition, requestedId: numb
     destination_dataset: destinationDataset,
     destination_table: destinationTable,
     write_disposition: writeDisposition,
-    ...buildDatamartAuditFields({
-      destinationDataset,
-      destinationTable,
-      writeDisposition,
-      sqlAnalysis,
-    }),
+    ...buildDatamartAuditFields({ destinationDataset, destinationTable, writeDisposition, sqlAnalysis }),
     merge_keys: readBigQueryStringArray(bigqueryOption, "merge_keys"),
     incremental_column: readBigQueryString(bigqueryOption, "incremental_column"),
     lookback_period: {
@@ -399,22 +489,26 @@ function normalizeDatamart(datamart: TroccoDatamartDefinition, requestedId: numb
   };
 }
 
-function buildExpectedCurrentMismatches(
-  current: TroccoDatamartDefinition,
-  expectedCurrent: Record<string, unknown> | undefined,
-): Array<{ field: string; expected: unknown; actual: unknown }> {
+function buildExpectedCurrentMismatches(current: TroccoDatamartDefinition, expectedCurrent: Record<string, unknown> | undefined): Array<{ field: string; expected: unknown; actual: unknown }> {
   if (!expectedCurrent) {
     return [];
   }
-
   const bigqueryOption = isRecord(current.datamart_bigquery_option) ? current.datamart_bigquery_option : {};
+  return Object.entries(expectedCurrent).map(([field, expected]) => {
+    const actual = field in bigqueryOption ? bigqueryOption[field] : current[field];
+    return valuesEqual(actual, expected) ? null : { field, expected, actual };
+  }).filter((mismatch): mismatch is { field: string; expected: unknown; actual: unknown } => mismatch !== null);
+}
 
-  return Object.entries(expectedCurrent)
-    .map(([field, expected]) => {
-      const actual = field in bigqueryOption ? bigqueryOption[field] : current[field];
-      return valuesEqual(actual, expected) ? null : { field, expected, actual };
-    })
-    .filter((mismatch): mismatch is { field: string; expected: unknown; actual: unknown } => mismatch !== null);
+function buildWorkflowExpectedCurrentMismatches(current: TroccoWorkflow, expectedCurrent: Record<string, unknown> | undefined): Array<{ field: string; expected: unknown; actual: unknown }> {
+  if (!expectedCurrent) {
+    return [];
+  }
+  const normalized = normalizeWorkflow(current, readNumber(current.id) ?? 0);
+  return Object.entries(expectedCurrent).map(([field, expected]) => {
+    const actual = field in normalized ? normalized[field as keyof typeof normalized] : current[field];
+    return valuesEqual(actual, expected) ? null : { field, expected, actual };
+  }).filter((mismatch): mismatch is { field: string; expected: unknown; actual: unknown } => mismatch !== null);
 }
 
 function valuesEqual(actual: unknown, expected: unknown): boolean {
@@ -422,21 +516,13 @@ function valuesEqual(actual: unknown, expected: unknown): boolean {
 }
 
 function jsonContent(value: unknown) {
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify(value, null, 2),
-      },
-    ],
-  };
+  return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
 }
 
 function toErrorPayload(error: unknown) {
   if (error instanceof TroccoClientError) {
     return error.toPayload();
   }
-
   return {
     ok: false,
     error: {
@@ -459,8 +545,27 @@ function readNumber(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
 }
 
+function readStringOrNumber(value: unknown): string | number | undefined {
+  return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
 function readStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined;
+}
+
+function readTaskIdentifier(task: Record<string, unknown>): string | undefined {
+  const identifier = readStringOrNumber(task.task_identifier) ?? readStringOrNumber(task.key) ?? readStringOrNumber(task.identifier);
+  return normalizeIdentifier(identifier);
+}
+
+function normalizeIdentifier(identifier: unknown): string | undefined {
+  if (typeof identifier === "string") {
+    return identifier;
+  }
+  if (typeof identifier === "number") {
+    return String(identifier);
+  }
+  return undefined;
 }
 
 function readBigQueryString(bigqueryOption: Record<string, unknown> | null, key: string): string | undefined {
