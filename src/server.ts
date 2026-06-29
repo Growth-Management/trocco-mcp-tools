@@ -6,6 +6,12 @@ import { TroccoClient, TroccoClientError, type TroccoDatamartDefinition, type Tr
 
 const TaskIdentifierSchema = z.union([z.string().min(1), z.number().int().nonnegative()]);
 const LooseConfigSchema = z.object({}).passthrough();
+const IfElseConfigSchema = z.object({
+  condition: LooseConfigSchema.optional(),
+}).passthrough();
+const SlackNotifyConfigSchema = z.object({
+  message: z.string().optional(),
+}).passthrough();
 
 const BigQueryDataCheckTaskSchema = z.object({
   task_identifier: TaskIdentifierSchema,
@@ -24,13 +30,13 @@ const BigQueryDataCheckTaskSchema = z.object({
 const IfElseTaskSchema = z.object({
   task_identifier: TaskIdentifierSchema,
   type: z.literal("if_else"),
-  if_else_config: LooseConfigSchema,
+  if_else_config: IfElseConfigSchema,
 }).passthrough();
 
 const SlackNotifyTaskSchema = z.object({
   task_identifier: TaskIdentifierSchema,
   type: z.literal("slack_notify"),
-  slack_notify_config: LooseConfigSchema,
+  slack_notify_config: SlackNotifyConfigSchema,
 }).passthrough();
 
 const WorkflowPatchTaskSchema = z.discriminatedUnion("type", [
