@@ -585,16 +585,13 @@ function normalizeIfElseConfigForWorkflowPatch(config: Record<string, unknown>):
 
 function normalizeIfElseConditionForWorkflowPatch(condition: Record<string, unknown>): Record<string, unknown> {
   const nextCondition = { ...condition };
-  const taskKey = normalizeNonEmptyReference(condition.task_key);
-  const identifier = normalizeNonEmptyReference(condition.identifier);
+  const reference = normalizeNonEmptyReference(condition.task_key) ?? normalizeNonEmptyReference(condition.identifier);
 
   delete nextCondition.task_key;
   delete nextCondition.identifier;
 
-  if (taskKey) {
-    nextCondition.task_key = taskKey;
-  } else if (identifier) {
-    nextCondition.identifier = identifier;
+  if (reference) {
+    nextCondition.task_key = reference;
   }
   return nextCondition;
 }
