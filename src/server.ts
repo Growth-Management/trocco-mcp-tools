@@ -30,20 +30,23 @@ const SlackNotifyConfigSchema = z.object({
   message: z.string().optional(),
   ignore_error: z.boolean().optional(),
 }).passthrough();
+const BigQueryDataCheckConfigPatchSchema = z.object({
+  connection_id: z.number().int().positive().optional(),
+  name: z.string().min(1).optional(),
+  query: z.string().min(1).optional(),
+  operator: z.string().min(1).optional(),
+  query_result: z.union([z.string(), z.number(), z.boolean()]).optional(),
+  accepts_null: z.boolean().optional(),
+  custom_variables: z.array(LooseConfigSchema).optional(),
+}).passthrough().refine((config) => Object.keys(config).length > 0, {
+  message: "bigquery_data_check_config must include at least one field.",
+});
 
 const BigQueryDataCheckTaskSchema = z.object({
   key: TaskKeySchema.optional(),
   task_identifier: TaskIdentifierSchema.optional(),
   type: z.literal("bigquery_data_check"),
-  bigquery_data_check_config: z.object({
-    connection_id: z.number().int().positive(),
-    name: z.string().min(1),
-    query: z.string().min(1),
-    operator: z.string().min(1),
-    query_result: z.union([z.string(), z.number(), z.boolean()]),
-    accepts_null: z.boolean().optional(),
-    custom_variables: z.array(LooseConfigSchema).optional(),
-  }).passthrough(),
+  bigquery_data_check_config: BigQueryDataCheckConfigPatchSchema,
 }).passthrough();
 
 const IfElseTaskSchema = z.object({
@@ -472,12 +475,9 @@ function buildWorkflowPatchBase(current: TroccoWorkflow): Record<string, unknown
 
 function mergeTasks(currentTasks: unknown[], upsertTasks: Array<z.infer<typeof WorkflowPatchTaskSchema>>) {
   const nextTasks = currentTasks.filter(isRecord).map(normalizeTaskForWorkflowPatch);
-  const keyToIndex = new Map<string, number>();
+  const taskReferenceToIndex = new Map<string, number>();
   for (const [index, task] of nextTasks.entries()) {
-    const key = readString(task.key);
-    if (key) {
-      keyToIndex.set(key, index);
-    }
+    addTaskReferenceIndexEntries(taskReferenceToIndex, task, index);
   }
 
   let nextTaskIdentifier = maxTaskIdentifier(nextTasks) + 1;
@@ -487,12 +487,12 @@ function mergeTasks(currentTasks: unknown[], upsertTasks: Array<z.infer<typeof W
       throw new Error("upsert task must include key or task_identifier.");
     }
 
-    const existingIndex = keyToIndex.get(key);
+    const existingIndex = taskReferenceToIndex.get(key);
     const existingTask = existingIndex === undefined ? undefined : nextTasks[existingIndex];
     const assignedIdentifier = readNumber(existingTask?.task_identifier)
       ?? readNumber(task.task_identifier)
       ?? nextTaskIdentifier++;
-    const taskPayload = normalizeUpsertTaskForWorkflowPatch(task, key, assignedIdentifier);
+    const taskPayload = normalizeUpsertTaskForWorkflowPatch(task, key, assignedIdentifier, existingTask);
 
     if (existingIndex !== undefined) {
       nextTasks[existingIndex] = {
@@ -500,12 +500,24 @@ function mergeTasks(currentTasks: unknown[], upsertTasks: Array<z.infer<typeof W
         ...taskPayload,
       };
     } else {
-      keyToIndex.set(key, nextTasks.length);
       nextTasks.push(taskPayload);
+      addTaskReferenceIndexEntries(taskReferenceToIndex, taskPayload, nextTasks.length - 1);
     }
   }
 
   return nextTasks.map(normalizeTaskConfigForWorkflowPatch);
+}
+
+function addTaskReferenceIndexEntries(
+  taskReferenceToIndex: Map<string, number>,
+  task: Record<string, unknown>,
+  index: number,
+) {
+  for (const reference of [readString(task.key), normalizeIdentifier(task.task_identifier), readString(task.identifier)]) {
+    if (reference) {
+      taskReferenceToIndex.set(reference, index);
+    }
+  }
 }
 
 function normalizeTaskForWorkflowPatch(task: Record<string, unknown>): Record<string, unknown> {
@@ -530,10 +542,61 @@ function normalizeUpsertTaskForWorkflowPatch(
   task: z.infer<typeof WorkflowPatchTaskSchema>,
   key: string,
   taskIdentifier: number,
+  existingTask?: Record<string, unknown>,
 ): Record<string, unknown> {
   const payload: Record<string, unknown> = { ...task, key, task_identifier: taskIdentifier };
+  if (task.type === "bigquery_data_check") {
+    payload.bigquery_data_check_config = mergeBigQueryDataCheckConfigForWorkflowPatch(
+      existingTask,
+      task.bigquery_data_check_config,
+      key,
+    );
+  }
   delete payload.identifier;
   return payload;
+}
+
+function mergeBigQueryDataCheckConfigForWorkflowPatch(
+  existingTask: Record<string, unknown> | undefined,
+  patchConfig: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> {
+  const existingConfig = isRecord(existingTask?.bigquery_data_check_config)
+    ? existingTask.bigquery_data_check_config
+    : {};
+  const nextConfig: Record<string, unknown> = { ...existingConfig };
+  for (const [field, value] of Object.entries(patchConfig)) {
+    if (value !== undefined) {
+      nextConfig[field] = value;
+    }
+  }
+  assertCompleteBigQueryDataCheckConfig(nextConfig, key);
+  return nextConfig;
+}
+
+function assertCompleteBigQueryDataCheckConfig(config: Record<string, unknown>, key: string) {
+  const missingFields = [];
+  if (typeof config.connection_id !== "number") {
+    missingFields.push("connection_id");
+  }
+  if (typeof config.name !== "string" || config.name.length === 0) {
+    missingFields.push("name");
+  }
+  if (typeof config.query !== "string" || config.query.length === 0) {
+    missingFields.push("query");
+  }
+  if (typeof config.operator !== "string" || config.operator.length === 0) {
+    missingFields.push("operator");
+  }
+  if (!("query_result" in config)) {
+    missingFields.push("query_result");
+  }
+  if (missingFields.length > 0) {
+    throw new Error(
+      `bigquery_data_check task ${key} is missing required config fields after merge: ${missingFields.join(", ")}. `
+      + "Provide a full config for new tasks, or target an existing task by key/task_identifier for partial updates.",
+    );
+  }
 }
 
 function normalizeTaskConfigForWorkflowPatch(task: Record<string, unknown>): Record<string, unknown> {
