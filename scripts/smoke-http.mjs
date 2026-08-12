@@ -86,10 +86,11 @@ try {
   const workflow = await callTool("get_workflow", {
     pipeline_definition_id: pipelineDefinitionId,
   });
-  assert(workflow.workflow_name, "get_workflow did not return workflow_name.");
+  const workflowName = workflow.workflow_name ?? workflow.name;
+  assert(workflowName, "get_workflow did not return a workflow name.");
   report("get_workflow", {
     pipeline_definition_id: pipelineDefinitionId,
-    workflow_name: workflow.workflow_name,
+    workflow_name: workflowName,
   });
 
   const smokeDatamart = await callTool("get_datamart", {
