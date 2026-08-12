@@ -44,6 +44,7 @@ TROCCO API を Model Context Protocol (MCP) から扱うためのツール群で
 - TROCCO API client: `src/troccoClient.ts`
 - SQL analysis: `src/sqlAnalysis.ts`
 - Audit model: `src/auditModel.ts`
+- SQL inventory model: `src/inventoryModel.ts`
 - HTTP smoke test: `scripts/smoke-http.mjs`
 - Datamart action smoke test: `scripts/smoke-datamart-actions.mjs`
 
@@ -192,6 +193,13 @@ Cloud Shell などで Inspector proxy が扱いづらい場合は、MCP SDK clie
 
 ## MCP tools
 
+SQL資産棚卸しでは、巨大な `build_workflow_audit_payload` を展開せず、次の順で小さく取得します。
+
+1. `list_workflow_datamarts`
+2. `get_datamart` または `get_datamarts`
+3. 必要に応じて `analyze_datamart_sql`
+4. `search_keys` を使ったGitHub/dbtモデル検索
+
 ### `get_workflow`
 
 指定した workflow の構造を取得します。
@@ -210,7 +218,7 @@ Input:
 
 ### `get_datamart`
 
-指定した datamart definition の SQL と BigQuery option metadata を取得します。
+指定した datamart definition をSQL資産棚卸し用の標準形式で取得します。`pipeline_definition_id` を指定すると、Workflow上の直接上流Datamartも `dependencies.workflow_nodes` に含めます。`include_query: false` ではSQL全文を省略し、`include_raw: true` のときだけTROCCO APIの生レスポンスを含めます。
 
 TROCCO endpoint:
 
@@ -220,7 +228,46 @@ Input:
 
 ```json
 {
-  "datamart_definition_id": 12345
+  "datamart_definition_id": 12345,
+  "pipeline_definition_id": 3847,
+  "include_query": true
+}
+```
+
+### `list_workflow_datamarts`
+
+Workflowのtask順を保ってDatamart IDと名前だけをページング取得します。`execution_order` はWorkflowの `tasks[]` における1始まりの位置です。SQL全文は返しません。名前がWorkflow taskにない場合もIDと他の結果は保持し、`datamart_errors` に対象ID付きで記録します。
+
+```json
+{
+  "pipeline_definition_id": 3847,
+  "limit": 10,
+  "offset": 0
+}
+```
+
+### `get_datamarts`
+
+最大5件を小規模batchで取得します。一部失敗時も成功結果は `datamarts` に残り、失敗は `datamart_errors` に対象ID付きで返ります。
+
+```json
+{
+  "datamart_definition_ids": [8251, 8269],
+  "pipeline_definition_id": 3847,
+  "include_query": false
+}
+```
+
+### `analyze_datamart_sql`
+
+SQLから `source_tables`、`ctes`、特徴的な `sql_identifiers`、destination候補、write mode候補、優先度付き `search_keys` を返します。
+
+```json
+{
+  "query": "select * from `project.dataset.source_table`",
+  "datamart_definition_id": 8251,
+  "name": "example_datamart",
+  "destination_fqtn": "project.dataset.example_table"
 }
 ```
 
@@ -353,6 +400,8 @@ Input example:
 `sql_analysis` は SQL コメントを除去したうえで、監査に必要な最低限の候補を抽出します。
 
 - `from` / `join` から source table 候補を抽出
+- `with ... as` から CTE 名を抽出し、source table 候補からCTE参照を除外
+- GitHub検索候補としてDatamart名、destination、source、CTE、SQL identifierを優先度順に生成
 - `create or replace table` / `insert into` / `insert <table>` / `delete from` / `merge` から destination 候補を抽出
 - `delete from` と `insert` の組み合わせを `delete_insert` として推定
 - `merge` を `merge` として推定
