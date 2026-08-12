@@ -277,7 +277,7 @@ export function createTroccoMcpServer() {
         }
         return jsonContent({ ok: datamart_errors.length === 0, datamarts, datamart_errors });
       } catch (error) {
-        return jsonContent({ ok: false, datamarts, datamart_errors, ...toErrorPayload(error) });
+        return jsonContent({ datamarts, datamart_errors, ...toErrorPayload(error) });
       }
     },
   );
