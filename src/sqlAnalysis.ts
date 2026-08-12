@@ -7,6 +7,8 @@ export type SqlWriteDispositionInference = "delete_insert" | "merge" | "append" 
 
 export type SqlAnalysis = {
   source_tables: string[];
+  ctes: string[];
+  identifiers: string[];
   destinations: SqlDestination[];
   inferred_write_disposition: SqlWriteDispositionInference;
   has_delete_statement: boolean;
@@ -20,7 +22,10 @@ const TABLE_IDENTIFIER_PATTERN = "`[^`]+`|[A-Za-z0-9_$-]+(?:\\.[A-Za-z0-9_$-]+){
 
 export function analyzeSql(sql: string | undefined): SqlAnalysis {
   const normalizedSql = stripSqlComments(sql ?? "");
-  const sourceTables = unique(extractSourceTables(normalizedSql));
+  const ctes = unique(extractCtes(normalizedSql));
+  const cteNames = new Set(ctes.map((cte) => cte.toLowerCase()));
+  const sourceTables = unique(extractSourceTables(normalizedSql))
+    .filter((table) => !cteNames.has(normalizeTableIdentifier(table)));
   const destinations = extractDestinations(normalizedSql);
   const destinationTables = unique(destinations.map((destination) => normalizeTableIdentifier(destination.table)));
   const normalizedSourceTables = sourceTables.map(normalizeTableIdentifier);
@@ -33,6 +38,8 @@ export function analyzeSql(sql: string | undefined): SqlAnalysis {
 
   return {
     source_tables: sourceTables,
+    ctes,
+    identifiers: extractIdentifiers(normalizedSql, sourceTables, ctes, destinations),
     destinations,
     inferred_write_disposition: inferWriteDisposition({
       hasDeleteStatement,
@@ -46,6 +53,47 @@ export function analyzeSql(sql: string | undefined): SqlAnalysis {
     has_create_or_replace_table_statement: hasCreateOrReplaceTableStatement,
     destination_also_used_as_source: destinationTables.some((destination) => normalizedSourceTables.includes(destination)),
   };
+}
+
+function extractCtes(sql: string): string[] {
+  const ctes: string[] = [];
+  const pattern = /(?:\bwith\s+|,)\s*([A-Za-z_][A-Za-z0-9_]*)\s+as\s*\(/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(sql)) !== null) {
+    if (match[1]) {
+      ctes.push(match[1]);
+    }
+  }
+  return ctes;
+}
+
+function extractIdentifiers(
+  sql: string,
+  sourceTables: string[],
+  ctes: string[],
+  destinations: SqlDestination[],
+): string[] {
+  const reserved = new Set([
+    "all", "and", "as", "asc", "by", "case", "cast", "create", "cross", "date", "delete", "desc",
+    "distinct", "else", "end", "false", "from", "full", "group", "having", "inner", "insert", "into",
+    "join", "left", "limit", "merge", "not", "null", "on", "or", "order", "outer", "over", "partition",
+    "qualify", "replace", "right", "select", "table", "then", "true", "union", "update", "using", "values",
+    "when", "where", "window", "with",
+  ]);
+  const structural = new Set([
+    ...ctes.map((value) => value.toLowerCase()),
+    ...sourceTables.flatMap(identifierParts),
+    ...destinations.flatMap((destination) => identifierParts(destination.table)),
+  ]);
+  const matches = sql.match(/\b[A-Za-z_][A-Za-z0-9_]{3,}\b/g) ?? [];
+  return unique(matches.filter((value) => {
+    const normalized = value.toLowerCase();
+    return !reserved.has(normalized) && !structural.has(normalized);
+  })).slice(0, 50);
+}
+
+function identifierParts(identifier: string): string[] {
+  return identifier.replace(/^`|`$/g, "").toLowerCase().split(".");
 }
 
 function stripSqlComments(sql: string): string {

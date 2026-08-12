@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { attachDownstreamReferences, buildDatamartAuditFields } from "./auditModel.js";
 import { analyzeSql } from "./sqlAnalysis.js";
+import { buildInventoryDatamart, buildSqlInventoryAnalysis, buildWorkflowDatamartIndex } from "./inventoryModel.js";
 import { TroccoClient, TroccoClientError, type TroccoDatamartDefinition, type TroccoWorkflow } from "./troccoClient.js";
 
 const TaskIdentifierSchema = z.union([z.string().min(1), z.number().int().nonnegative()]);
@@ -181,18 +182,126 @@ export function createTroccoMcpServer() {
   );
 
   server.tool(
+    "list_workflow_datamarts",
+    "List BigQuery datamarts in a TROCCO workflow without returning SQL bodies. Supports offset pagination.",
+    {
+      pipeline_definition_id: z.number().int().positive(),
+      limit: z.number().int().min(1).max(100).optional(),
+      offset: z.number().int().nonnegative().optional(),
+    },
+    async ({ pipeline_definition_id, limit = 10, offset = 0 }) => {
+      try {
+        const client = new TroccoClient();
+        const workflow = await client.getWorkflow(pipeline_definition_id);
+        const allDatamarts = buildWorkflowDatamartIndex(workflow);
+        const page = allDatamarts.slice(offset, offset + limit);
+        const datamart_errors = page.filter((node) => node.name === null).map((node) => ({
+          datamart_definition_id: node.datamart_definition_id,
+          error: {
+            code: "missing_name",
+            message: "Workflow datamart task does not include trocco_bigquery_datamart_config.name.",
+          },
+        }));
+
+        return jsonContent({
+          ok: datamart_errors.length === 0,
+          pipeline_definition_id: readNumber(workflow.id) ?? pipeline_definition_id,
+          workflow_name: readString(workflow.name) ?? null,
+          datamart_count: allDatamarts.length,
+          total: allDatamarts.length,
+          limit,
+          offset,
+          has_more: offset + page.length < allDatamarts.length,
+          datamarts: page,
+          datamart_errors,
+        });
+      } catch (error) {
+        return jsonContent({ pipeline_definition_id, ...toErrorPayload(error) });
+      }
+    },
+  );
+
+  server.tool(
     "get_datamart",
-    "Fetch a TROCCO datamart definition by datamart_definition_id, including BigQuery SQL and option metadata when available.",
-    { datamart_definition_id: z.number().int().positive() },
-    async ({ datamart_definition_id }) => {
+    "Fetch one TROCCO datamart in the standard SQL inventory shape. Set include_query false to reduce response size.",
+    {
+      datamart_definition_id: z.number().int().positive(),
+      pipeline_definition_id: z.number().int().positive().optional(),
+      include_query: z.boolean().optional(),
+      include_raw: z.boolean().optional(),
+    },
+    async ({ datamart_definition_id, pipeline_definition_id, include_query = true, include_raw = false }) => {
       try {
         const client = new TroccoClient();
         const datamart = await client.getDatamart(datamart_definition_id);
-        return jsonContent({ ok: true, ...normalizeDatamart(datamart, datamart_definition_id), raw: datamart });
+        const workflowNodes = pipeline_definition_id === undefined
+          ? undefined
+          : buildWorkflowDatamartIndex(await client.getWorkflow(pipeline_definition_id));
+        return jsonContent({
+          ok: true,
+          ...buildInventoryDatamart(datamart, datamart_definition_id, { includeQuery: include_query, workflowNodes }),
+          ...(include_raw ? { raw: datamart } : {}),
+        });
       } catch (error) {
-        return jsonContent(toErrorPayload(error));
+        return jsonContent({ datamart_definition_id, ...toErrorPayload(error) });
       }
     },
+  );
+
+  server.tool(
+    "get_datamarts",
+    "Fetch up to five TROCCO datamarts. Each result or error is retained independently.",
+    {
+      datamart_definition_ids: z.array(z.number().int().positive()).min(1).max(5),
+      pipeline_definition_id: z.number().int().positive().optional(),
+      include_query: z.boolean().optional(),
+    },
+    async ({ datamart_definition_ids, pipeline_definition_id, include_query = true }) => {
+      const datamarts = [];
+      const datamart_errors = [];
+      try {
+        const client = new TroccoClient();
+        const workflowNodes = pipeline_definition_id === undefined
+          ? []
+          : buildWorkflowDatamartIndex(await client.getWorkflow(pipeline_definition_id));
+        for (const datamartDefinitionId of datamart_definition_ids) {
+          try {
+            const datamart = await client.getDatamart(datamartDefinitionId);
+            datamarts.push(buildInventoryDatamart(datamart, datamartDefinitionId, {
+              includeQuery: include_query,
+              workflowNodes,
+            }));
+          } catch (error) {
+            datamart_errors.push({ datamart_definition_id: datamartDefinitionId, ...toErrorPayload(error) });
+          }
+        }
+        return jsonContent({ ok: datamart_errors.length === 0, datamarts, datamart_errors });
+      } catch (error) {
+        return jsonContent({ ok: false, datamarts, datamart_errors, ...toErrorPayload(error) });
+      }
+    },
+  );
+
+  server.tool(
+    "analyze_datamart_sql",
+    "Analyze SQL for source tables, CTEs, identifiers, destinations, and ordered GitHub search keys.",
+    {
+      query: z.string(),
+      datamart_definition_id: z.number().int().positive().optional(),
+      name: z.string().min(1).optional(),
+      destination_fqtn: z.string().min(1).optional(),
+      destination_table: z.string().min(1).optional(),
+    },
+    async ({ query, datamart_definition_id, name, destination_fqtn, destination_table }) => jsonContent({
+      ok: true,
+      ...buildSqlInventoryAnalysis({
+        query,
+        datamartDefinitionId: datamart_definition_id,
+        name,
+        destinationFqtn: destination_fqtn,
+        destinationTable: destination_table,
+      }),
+    }),
   );
 
   server.tool(
