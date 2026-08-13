@@ -117,6 +117,15 @@ try {
     datamart_error_count: auditErrorCount,
   });
 
+  const unpagedList = await callTool("list_workflow_datamarts", {
+    pipeline_definition_id: pipelineDefinitionId,
+  });
+  assert(Array.isArray(unpagedList.datamarts), "Default list response did not return datamarts.");
+  assert(unpagedList.datamarts.length === unpagedList.total, "Default list response did not return the full inventory.");
+  assert(unpagedList.datamarts.every((item) => item.datamart_definition_id != null), "Default list response contains a null ID.");
+  assert(unpagedList.datamarts.every((item) => item.name != null), "Default list response contains a null name.");
+  assert(unpagedList.datamarts.every((item) => item.query === undefined), "Default list response leaked SQL query text.");
+
   const pageSize = 10;
   const listedDatamarts = [];
   let offset = 0;
@@ -148,6 +157,8 @@ try {
     pages: Math.ceil(listedIds.length / pageSize),
     unique_id_count: new Set(listedIds).size,
     query_bodies_returned: 0,
+    default_call_returned_all: unpagedList.datamarts.length === listedIds.length,
+    null_id_count: listedIds.filter((id) => id == null).length,
   });
 
   const sequentialSampleIds = listedIds.slice(0, 3);

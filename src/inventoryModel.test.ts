@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildInventoryDatamart, buildSqlInventoryAnalysis, buildWorkflowDatamartIndex } from "./inventoryModel.js";
+import { buildInventoryDatamart, buildSqlInventoryAnalysis, buildWorkflowDatamartIndex, buildWorkflowDatamartWarnings } from "./inventoryModel.js";
 
 test("workflow index preserves task order and normalizes direct dependencies", () => {
   const workflow = {
@@ -26,6 +26,7 @@ test("workflow index preserves task order and normalizes direct dependencies", (
   const nodes = buildWorkflowDatamartIndex(workflow);
   assert.equal(nodes.length, 2);
   assert.equal(nodes[0]?.datamart_definition_id, 8251);
+  assert.equal(nodes[0]?.task_identifier, "10");
   assert.equal(nodes[1]?.execution_order, 2);
   assert.deepEqual(nodes[1]?.direct_upstream_node_ids, ["10"]);
   assert.equal(nodes[1]?.direct_upstream_nodes[0]?.datamart_definition_id, 8251);
@@ -93,4 +94,35 @@ test("SQL analysis builds destination and source search keys", () => {
     "destination_table",
     "source_fqtn",
   ]);
+});
+
+
+test("workflow index reports malformed datamart tasks without failing valid nodes", () => {
+  const workflow = {
+    tasks: [
+      {
+        task_identifier: 10,
+        type: "trocco_bigquery_datamart",
+        trocco_bigquery_datamart_config: { definition_id: 8251, name: "valid_datamart" },
+      },
+      {
+        task_identifier: 20,
+        type: "trocco_bigquery_datamart",
+        trocco_bigquery_datamart_config: {},
+      },
+      {
+        task_identifier: 30,
+        type: "trocco_bigquery_datamart",
+        trocco_bigquery_datamart_config: { definition_id: 8269 },
+      },
+    ],
+  };
+
+  const nodes = buildWorkflowDatamartIndex(workflow);
+  const warnings = buildWorkflowDatamartWarnings(workflow);
+
+  assert.equal(nodes.length, 2);
+  assert.deepEqual(nodes.map((node) => node.datamart_definition_id), [8251, 8269]);
+  assert.equal(warnings.length, 2);
+  assert.deepEqual(warnings.map((warning) => warning.node_id), ["20", "30"]);
 });

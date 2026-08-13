@@ -4,6 +4,7 @@ import type { TroccoDatamartDefinition, TroccoWorkflow } from "./troccoClient.js
 export type WorkflowDatamartNode = {
   datamart_definition_id: number;
   name: string | null;
+  task_identifier: string | null;
   node_id: string | null;
   node_type: string;
   execution_order: number;
@@ -19,6 +20,24 @@ export type WorkflowDependencyNode = {
   datamart_definition_id: number | null;
   name: string | null;
 };
+
+export function buildWorkflowDatamartWarnings(workflow: TroccoWorkflow) {
+  const tasks = Array.isArray(workflow.tasks) ? workflow.tasks.filter(isRecord) : [];
+  return tasks.flatMap((task) => {
+    if (task.type !== "trocco_bigquery_datamart") {
+      return [];
+    }
+    const nodeId = readNodeId(task);
+    const config = isRecord(task.trocco_bigquery_datamart_config) ? task.trocco_bigquery_datamart_config : {};
+    if (!readNestedNumber(task, ["trocco_bigquery_datamart_config", "definition_id"])) {
+      return [{ node_id: nodeId, message: "Workflow datamart task is missing definition_id and was omitted." }];
+    }
+    if (!readString(config.name) && !readString(task.name) && !readString(task.key) && !readString(task.identifier)) {
+      return [{ node_id: nodeId, message: "Workflow datamart task is missing a readable name." }];
+    }
+    return [];
+  });
+}
 
 export function buildWorkflowDatamartIndex(workflow: TroccoWorkflow) {
   const tasks = Array.isArray(workflow.tasks) ? workflow.tasks.filter(isRecord) : [];
@@ -44,6 +63,7 @@ export function buildWorkflowDatamartIndex(workflow: TroccoWorkflow) {
     return [{
       datamart_definition_id: definitionId,
       name: readString(config.name) ?? readString(task.name) ?? readString(task.key) ?? readString(task.identifier) ?? null,
+      task_identifier: normalizeId(task.task_identifier) ?? null,
       node_id: nodeId,
       node_type: "trocco_bigquery_datamart",
       execution_order: executionOrder + 1,

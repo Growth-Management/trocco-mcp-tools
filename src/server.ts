@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { attachDownstreamReferences, buildDatamartAuditFields } from "./auditModel.js";
 import { analyzeSql } from "./sqlAnalysis.js";
-import { buildInventoryDatamart, buildSqlInventoryAnalysis, buildWorkflowDatamartIndex } from "./inventoryModel.js";
+import { buildInventoryDatamart, buildSqlInventoryAnalysis, buildWorkflowDatamartIndex, buildWorkflowDatamartWarnings } from "./inventoryModel.js";
 import { TroccoClient, TroccoClientError, type TroccoDatamartDefinition, type TroccoWorkflow } from "./troccoClient.js";
 
 const TaskIdentifierSchema = z.union([z.string().min(1), z.number().int().nonnegative()]);
@@ -189,22 +189,16 @@ export function createTroccoMcpServer() {
       limit: z.number().int().min(1).max(100).optional(),
       offset: z.number().int().nonnegative().optional(),
     },
-    async ({ pipeline_definition_id, limit = 10, offset = 0 }) => {
+    async ({ pipeline_definition_id, limit = 50, offset = 0 }) => {
       try {
         const client = new TroccoClient();
         const workflow = await client.getWorkflow(pipeline_definition_id);
         const allDatamarts = buildWorkflowDatamartIndex(workflow);
         const page = allDatamarts.slice(offset, offset + limit);
-        const datamart_errors = page.filter((node) => node.name === null).map((node) => ({
-          datamart_definition_id: node.datamart_definition_id,
-          error: {
-            code: "missing_name",
-            message: "Workflow datamart task does not include trocco_bigquery_datamart_config.name.",
-          },
-        }));
+        const warnings = buildWorkflowDatamartWarnings(workflow);
 
         return jsonContent({
-          ok: datamart_errors.length === 0,
+          ok: true,
           pipeline_definition_id: readNumber(workflow.id) ?? pipeline_definition_id,
           workflow_name: readString(workflow.name) ?? null,
           datamart_count: allDatamarts.length,
@@ -213,10 +207,17 @@ export function createTroccoMcpServer() {
           offset,
           has_more: offset + page.length < allDatamarts.length,
           datamarts: page,
-          datamart_errors,
+          ...(warnings.length > 0 ? { warnings } : {}),
         });
       } catch (error) {
-        return jsonContent({ pipeline_definition_id, ...toErrorPayload(error) });
+        const failure = toErrorPayload(error);
+        return jsonContent({
+          ok: false,
+          pipeline_definition_id,
+          error_type: "workflow_fetch_failed",
+          error_message: failure.error.message,
+          error: failure.error,
+        });
       }
     },
   );

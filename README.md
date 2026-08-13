@@ -236,12 +236,12 @@ Input:
 
 ### `list_workflow_datamarts`
 
-Workflowのtask順を保ってDatamart IDと名前だけをページング取得します。`execution_order` はWorkflowの `tasks[]` における1始まりの位置です。SQL全文は返しません。名前がWorkflow taskにない場合もIDと他の結果は保持し、`datamart_errors` に対象ID付きで記録します。
+Workflowのtask順を保ってDatamart IDと名前だけを軽量取得します。引数省略時は最大50件を返し、`limit` / `offset` でページングできます。`execution_order` はWorkflowの `tasks[]` における1始まりの位置です。SQL全文は返しません。一部のnodeを解析できない場合も有効な結果は保持し、`warnings` に対象node付きで記録します。
 
 ```json
 {
   "pipeline_definition_id": 3847,
-  "limit": 10,
+  "limit": 50,
   "offset": 0
 }
 ```
